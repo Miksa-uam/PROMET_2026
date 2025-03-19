@@ -1,0 +1,48 @@
+REUNIÓN 12.30 Lunes 17 de Marzo
+PREGUNTAS DE ALFREDO
+RESPONDIDAS: 
+- si los individuos con psicología solapan - 1400 es buen N - y es basal o no? meter también las causas de pérdida de peso
+	-> hay 1500 con estos datos, todos tienen número de visitas pero varios tienen 1 solo, muchos de ellos tienen causa de aumento de peso detallado, y 160 tienen genética
+- quiénes han hecho visitas a dietitian 
+	-> de los que tienen psicología, tienen este dato recogido todos
+PENDIENTES: 
+- consumed meals:si se sabe si habían comido otra cosa, y qué otra cosa? si posible,en calorís
+- explorar todo de la comida para manana
+- suplementos,de eso que sabemos
+
+
+IDEAS DE ARTÍCULOS
+1. artículo:
+cambios de composición corporal
+
+2. situación basal emóciónál y weight loss 
+
+
+4, quizá 5., último: ver si carga genética predice pérdida de peso
+buscar genes con ML que preduigan mejor la perdida de peso - descripción,ategorización, clasificaión,predicción
+
+
+
+EN EFECTO: para el martes, crear una BD pequena con la gente que esperablemente tenga toda su datos emocionales, y de causa de oesidad. ver si tienen enética o no. Basicaente, NOTNA values of any of these, and then lke filter onwrds.
+
+OTRO EFECTO: 'qué son esto de las comidas' - understand, what are the consumed etc meals, and importantly WHAT ARE PRESCRIPTIONS AND MEDICAL RECORDS. These are more in number than the patients, so one patient has several prescriptions and records. How to treat this situations, how to map the prescription and the record to a patient, and how to keep everything relevant? 
+
+LEFT TO DO: 
+- git backup, need to assess terminal issue
+- ID DB elmentése esetleg? 
+- convos on relDB use in this case, learning the concept of SQL, and its possible use here. Also I could draft a written data base structure, to identify the relationships,and cross-referenceabilities. 
+- start directing myself towards body composition data use and interpretation!!
+- weight loss: wide with deltas, accounting for restarts
+- long for rest of uses
+
+QUESTIONS
+-se ve la inclusión de más datos, deep phenotyping o intervention en el trabajo 
+-cómo acercarme a la manipulació e interpretción de los datos longitudinales de pérdida de peso
+-qué son las cosas que seguramente podemos excluir de los 'clean's
+-what do the 'named' alleles mean exactly, like, what would CLOCK or NUTFAT be if it was an Rs value? 
+-can duplicate medical_records be 'reinicios'?
+-what are the different 'prescriptions'?
+-puedo hablar con Víctor, apoyarme de él, o en otro caso hay algo que Bego sabe sobre el proceso de procesamiento de datos?
+
+
+emotional predictors of weight loss
