@@ -39,10 +39,6 @@ QUESTIONS
 -se ve la inclusión de más datos, deep phenotyping o intervention en el trabajo 
 -cómo acercarme a la manipulació e interpretción de los datos longitudinales de pérdida de peso
 -qué son las cosas que seguramente podemos excluir de los 'clean's
--what do the 'named' alleles mean exactly, like, what would CLOCK or NUTFAT be if it was an Rs value? 
--can duplicate medical_records be 'reinicios'?
--what are the different 'prescriptions'?
--puedo hablar con Víctor, apoyarme de él, o en otro caso hay algo que Bego sabe sobre el proceso de procesamiento de datos?
 
 
 emotional predictors of weight loss
