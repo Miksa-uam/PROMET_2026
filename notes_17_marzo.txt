@@ -28,7 +28,6 @@ EN EFECTO: para el martes, crear una BD pequena con la gente que esperablemente 
 OTRO EFECTO: 'qué son esto de las comidas' - understand, what are the consumed etc meals, and importantly WHAT ARE PRESCRIPTIONS AND MEDICAL RECORDS. These are more in number than the patients, so one patient has several prescriptions and records. How to treat this situations, how to map the prescription and the record to a patient, and how to keep everything relevant? 
 
 LEFT TO DO: 
-- git backup, need to assess terminal issue
 - ID DB elmentése esetleg? 
 - convos on relDB use in this case, learning the concept of SQL, and its possible use here. Also I could draft a written data base structure, to identify the relationships,and cross-referenceabilities. 
 - start directing myself towards body composition data use and interpretation!!

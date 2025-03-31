@@ -1,0 +1,20 @@
+FIXED /prescriptions:
+all columns are mixed up, basically
+tomas totales column contains person names
+
+patients: 
+number of patients with genomics sample IDs do not correspond to the number of Yes options in the column Genomics_available:
+1427 'Available' with 2836 sample IDs in patients, and 2711 in alleles
+1918 have a sample ID but 'available' is set to No
+509 with 'available: yes' have no sample IDs
+only 918 patients have 'available: yes' AND a sample ID
+
+alleles: 
+commented in patients, otherwise OK
+
+medical records: 
+looks OK, although some age values are big outliers, 100+ (while still within the normal distribution)
+
+measurements: 
+looks OK, although some VAT values are big outliers (while still having a more or less normal distribution)
+
