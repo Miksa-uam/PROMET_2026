@@ -62,7 +62,7 @@ def generate_logreg_scenarios(
     scenarios = []
     # Add weight gain cause columns if needed
     wgc_predictors = []
-    if input_table == "timetoevent_eb_wgc_compl" and df_all is not None:
+    if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
         cols = list(df_all.columns)
         start = cols.index('weight_gain_cause_en') + 1
         end = cols.index('genomics_sample_id')
@@ -199,7 +199,7 @@ def generate_linreg_scenarios(
     scenarios = []
     # Add weight gain cause columns if needed
     wgc_predictors = []
-    if input_table == "timetoevent_eb_wgc_compl" and df_all is not None:
+    if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
         cols = list(df_all.columns)
         start = cols.index('weight_gain_cause_en') + 1
         end = cols.index('genomics_sample_id')
@@ -334,7 +334,7 @@ def generate_adherence_scenarios(
 
     # Dynamically add weight gain cause predictors if appropriate
     wgc_predictors = []
-    if input_table == "timetoevent_eb_wgc_compl" and df_all is not None:
+    if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
         cols = list(df_all.columns)
         start = cols.index('weight_gain_cause_en') + 1
         end = cols.index('genomics_sample_id')

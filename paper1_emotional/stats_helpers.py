@@ -47,24 +47,3 @@ def categorical_pvalue(x, y):
         except Exception:
             return np.nan
     return p
-
-def format_pval(p):
-    if pd.isna(p):
-        return "N/A"
-    return "<0.001" if p < 0.001 else f"{p:.3f}"
-
-def cohens_d(x, y):
-    x = pd.to_numeric(x, errors="coerce").dropna()
-    y = pd.to_numeric(y, errors="coerce").dropna()
-    nx, ny = len(x), len(y)
-    if nx < 2 or ny < 2:
-        return np.nan
-    pooled_sd = np.sqrt(((nx-1)*x.var(ddof=1) + (ny-1)*y.var(ddof=1)) / (nx+ny-2))
-    if pooled_sd == 0:
-        return 0.0
-    return (x.mean() - y.mean()) / pooled_sd
-
-def format_cohens_d(d):
-    if pd.isna(d):
-        return "N/A"
-    return f"{d:.2f}"
