@@ -45,7 +45,6 @@ def preprocess_for_eb_by_wgc_logreg(df, predictors, outcome):
     return df
 
 # ====LOGISTIC OUTCOME PREDICTIONS - INFERENCE====
-
 def generate_logreg_scenarios(
     outcome_types,
     time_windows,
@@ -64,23 +63,27 @@ def generate_logreg_scenarios(
     wgc_predictors = []
     if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
         cols = list(df_all.columns)
-        start = cols.index('weight_gain_cause_en') + 1
-        end = cols.index('genomics_sample_id')
-        wgc_predictors = cols[start:end]
-        main_predictors = list(main_predictors) + wgc_predictors
+        if 'weight_gain_cause_en' in cols and 'genomics_sample_id' in cols:
+            start = cols.index('weight_gain_cause_en') + 1
+            end = cols.index('genomics_sample_id')
+            wgc_predictors = cols[start:end]
+            main_predictors = list(main_predictors) + wgc_predictors
 
     for outcome_type in outcome_types:
         for tw in time_windows:
-            if outcome_type == 'target_wl' and tw == 'instant':
+            if outcome_type == 'target_wl':
+                target_percs = target_percentages
+            elif outcome_type == 'dropout':
+                target_percs = [None]
+            else:
                 continue
-            if outcome_type == 'dropout' and tw == 'total':
-                continue
-            target_percs = target_percentages if outcome_type == 'target_wl' else [None]
+                
             for target_perc in target_percs:
                 for predictor in main_predictors:
                     for covariates, adj_label in adjustment_sets:
                         name_parts = []
                         time_label = f"{tw}d" if isinstance(tw, int) else tw
+                        
                         if outcome_type == 'target_wl':
                             name_parts.append(time_label)
                             if target_perc is not None:
@@ -88,8 +91,10 @@ def generate_logreg_scenarios(
                             name_parts.append('wl')
                         elif outcome_type == 'dropout':
                             name_parts.extend([time_label, "dropout"])
+                            
                         name_parts.append(predictor.replace('_likert','').replace('_yn',''))
                         name_parts.append(adj_label)
+                        
                         scenario = {
                             'name': "_".join(name_parts),
                             'outcome_type': outcome_type,
@@ -102,27 +107,64 @@ def generate_logreg_scenarios(
     return scenarios
 
 def define_logreg_outcome(df, scenario):
-    """Create binary outcome column for the scenario."""
+    """
+    Create binary outcome column for the scenario.
+    SUCCESS is defined as achieving target weight loss WITHIN the specified time window (+5 days buffer).
+    """
     df = df.copy()
     name = scenario['name']
     outcome_type = scenario['outcome_type']
     tw = scenario['time_window']
     perc = scenario.get('target_perc')
+    
     if outcome_type == 'target_wl':
-        col = f"wl_{tw}d_%" if isinstance(tw, int) else "total_wl_%"
-        df[f"{name}_outcome"] = (df[col].abs() >= perc).astype(int)
+        if tw == 'total':
+            # For 'total' time window, use N%_wl_achieved column
+            achieved_col = f"{perc}%_wl_achieved"
+            if achieved_col in df.columns:
+                df[f"{name}_outcome"] = df[achieved_col].fillna(0).astype(int)
+            else:
+                print(f"Warning: Column {achieved_col} not found in data. Skipping scenario {name}.")
+                df[f"{name}_outcome"] = np.nan
+        else:
+            # Use days_to_X%_wl columns to define success
+            days_col = f"days_to_{perc}%_wl"
+            
+            if days_col in df.columns:
+                # Replace NULL values with 9999 to indicate "never achieved"
+                df[days_col] = df[days_col].fillna(9999)
+                
+                # Success = achieved target weight loss within time window + 5 days buffer
+                if isinstance(tw, int):
+                    df[f"{name}_outcome"] = (df[days_col] <= (tw + 5)).astype(int)
+                else:
+                    # Fallback for non-integer time windows
+                    df[f"{name}_outcome"] = (df[days_col] <= df['total_followup_days']).astype(int)
+            else:
+                print(f"Warning: Column {days_col} not found in data. Skipping scenario {name}.")
+                df[f"{name}_outcome"] = np.nan
+                
     elif outcome_type == 'dropout':
         if tw == 'instant':
             df[f"{name}_outcome"] = (df['nr_total_measurements'] == 1).astype(int)
         else:
+            # Use Nd_dropout column for dropout within time window
             col = f"{tw}d_dropout"
-            df[f"{name}_outcome"] = df[col].fillna(0).astype(int)
+            if col in df.columns:
+                df[f"{name}_outcome"] = df[col].fillna(0).astype(int)
+            else:
+                print(f"Warning: Column {col} not found in data. Skipping scenario {name}.")
+                df[f"{name}_outcome"] = np.nan
+    
     return df
 
 def run_logistic_regression(df, outcome_col, predictors):
     """Fit logistic regression and return summary DataFrame, skipping collinear predictors."""
+    print("DEBUG: Using NEW version of run_logistic_regression")  # Add this line
+    
     X = sm.add_constant(df[predictors])
     y = df[outcome_col]
+    
     # Check for collinearity or constant columns
     rank = np.linalg.matrix_rank(X)
     if rank < X.shape[1]:
@@ -133,6 +175,7 @@ def run_logistic_regression(df, outcome_col, predictors):
         else:
             print("  Collinearity detected (not just constant columns).")
         return None
+    
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -147,40 +190,62 @@ def run_logistic_regression(df, outcome_col, predictors):
     except Exception as e:
         print(f"Other error: {e} for predictors: {predictors}")
         return None
+    
     params = result.params
     conf = result.conf_int()
     or_ci = np.exp(conf)
+    
+    # Format OR with 95% CI in a single column
+    or_with_ci = []
+    for i, (or_val, ci_lower, ci_upper) in enumerate(zip(np.exp(params.values), or_ci[0].values, or_ci[1].values)):
+        or_with_ci.append(f"{or_val:.3f} ({ci_lower:.3f}-{ci_upper:.3f})")
+    
     summary = pd.DataFrame({
         'Variable': params.index,
         'Coefficient': params.values,
-        'Odds Ratio': np.exp(params.values),
-        'OR CI Lower 95%': or_ci[0].values,
-        'OR CI Upper 95%': or_ci[1].values,
+        'OR (95% CI)': or_with_ci,
         'P-Value': result.pvalues.values
     })
+    
     return summary
 
 def run_logreg_pipeline(db_path, input_table, scenarios, output_table, output_db_path):
     """Main pipeline: load, preprocess, run all scenarios, save results."""
     df = load_data(db_path, input_table)
     df = preprocess_for_regression(df, scenarios)
+    
     all_results = []
+    
     for scenario in scenarios:
         df_scen = define_logreg_outcome(df, scenario)
         outcome_col = f"{scenario['name']}_outcome"
+        
+        # Skip if outcome column has NaN (missing required columns)
+        if df_scen[outcome_col].isna().all():
+            print(f"Skipping scenario {scenario['name']} due to missing data.")
+            continue
+            
         cols = scenario['predictors'] + scenario['covariates']
         data = df_scen[[outcome_col] + cols].dropna()
+        
         if data[outcome_col].nunique() < 2 or data.empty:
+            print(f"Skipping scenario {scenario['name']} due to insufficient outcome variation or empty data.")
             continue
+            
         summary = run_logistic_regression(data, outcome_col, cols)
         if summary is not None:
             summary.insert(0, 'scenario', scenario['name'])
             all_results.append(summary)
+    
     if all_results:
         results_df = pd.concat(all_results, ignore_index=True)
         with sqlite3.connect(output_db_path) as conn:
             results_df.to_sql(output_table, conn, if_exists='replace', index=False)
         print(f"Saved results to {output_db_path}, table '{output_table}'.")
+        return results_df
+    else:
+        print("No valid results to save.")
+        return None
 
 # ====LINEAR OUTCOME PREDICTIONS - INFERENCE====
 
