@@ -1,0 +1,59 @@
+Variable,Cluster_0,Cluster_1,p-value,Test_Used,Effect_Sizes
+N (sample size),90,179,N/A,N/A,N/A
+sex_f,74 (82.2%),148 (82.7%),1.000,chi_square,N/A
+age,47.37 ± 10.29 (n=90),45.97 ± 10.97 (n=179),0.314,anova,G1vsG2: 0.130
+height_m,1.65 ± 0.07 (n=90),1.66 ± 0.07 (n=179),0.270,anova,G1vsG2: -0.143
+baseline_weight_kg,82.37 ± 11.41 (n=90),82.96 ± 12.27 (n=179),0.856,kruskal_wallis,G1vsG2: -0.049
+baseline_bmi,30.23 ± 2.91 (n=90),30.04 ± 2.95 (n=179),0.480,kruskal_wallis,G1vsG2: 0.067
+baseline_fat_%,40.91 ± 6.20 (n=90),40.73 ± 5.65 (n=179),0.581,kruskal_wallis,G1vsG2: 0.031
+baseline_muscle_%,29.59 ± 4.10 (n=90),29.79 ± 4.06 (n=179),0.697,anova,G1vsG2: -0.050
+total_followup_days,78.51 ± 63.51 (n=90),77.51 ± 70.53 (n=179),0.540,kruskal_wallis,G1vsG2: 0.015
+instant_dropout,3 (3.3%),9 (5.0%),0.756,fisher_exact,N/A
+dietitian_visits,4.77 ± 4.25 (n=90),4.29 ± 3.15 (n=179),0.889,kruskal_wallis,G1vsG2: 0.134
+nr_total_measurements,15.19 ± 16.95 (n=90),16.65 ± 18.76 (n=179),0.546,kruskal_wallis,G1vsG2: -0.080
+avg_days_between_measurements,7.44 ± 5.46 (n=87),6.58 ± 5.48 (n=170),0.108,kruskal_wallis,G1vsG2: 0.158
+last_aval_weight_kg,74.92 ± 11.32 (n=90),75.72 ± 11.90 (n=179),0.595,anova,G1vsG2: -0.069
+total_wl_kg,-7.45 ± 4.60 (n=90),-7.23 ± 5.34 (n=179),0.739,anova,G1vsG2: -0.043
+total_wl_%,-9.07 ± 5.51 (n=90),-8.63 ± 6.04 (n=179),0.561,anova,G1vsG2: -0.075
+final_bmi,27.49 ± 3.07 (n=90),27.43 ± 3.11 (n=179),0.878,anova,G1vsG2: 0.020
+bmi_reduction,-2.74 ± 1.69 (n=90),-2.61 ± 1.90 (n=179),0.566,anova,G1vsG2: -0.074
+last_aval_fat_%,35.88 ± 6.30 (n=90),35.79 ± 6.34 (n=179),0.920,anova,G1vsG2: 0.013
+total_fat_loss_%,-5.03 ± 3.17 (n=90),-4.94 ± 3.65 (n=179),0.828,anova,G1vsG2: -0.028
+last_aval_muscle_%,32.43 ± 4.04 (n=90),32.65 ± 4.48 (n=179),0.700,anova,G1vsG2: -0.050
+total_muscle_change_%,2.84 ± 1.84 (n=90),2.85 ± 2.18 (n=179),0.966,anova,G1vsG2: -0.006
+hunger_yn,49 (54.4%),158 (88.3%),<0.001,chi_square,N/A
+satiety_yn,1 (1.1%),174 (97.2%),<0.001,fisher_exact,N/A
+emotional_eating_yn,77 (85.6%),159 (88.8%),0.565,chi_square,N/A
+emotional_eating_value_likert,0 (0.0%),10 (5.6%),0.034,fisher_exact,N/A
+quantity_control_likert,3 (3.3%),7 (3.9%),1.000,fisher_exact,N/A
+impulse_control_likert,5 (5.6%),5 (2.8%),0.430,chi_square,N/A
+womens_health_and_pregnancy,28 (31.1%),52 (29.1%),0.836,chi_square,N/A
+mental_health,25 (27.8%),51 (28.5%),1.000,chi_square,N/A
+family_issues,1 (1.1%),15 (8.4%),0.015,fisher_exact,N/A
+medication_disease_injury,8 (8.9%),16 (8.9%),1.000,chi_square,N/A
+physical_inactivity,18 (20.0%),42 (23.5%),0.625,chi_square,N/A
+eating_habits,39 (43.3%),64 (35.8%),0.283,chi_square,N/A
+schedule,9 (10.0%),9 (5.0%),0.200,chi_square,N/A
+smoking_cessation,4 (4.4%),9 (5.0%),1.000,fisher_exact,N/A
+treatment_discontinuation_or_relapse,2 (2.2%),13 (7.3%),0.100,fisher_exact,N/A
+pandemic,10 (11.1%),24 (13.4%),0.734,chi_square,N/A
+lifestyle_circumstances,14 (15.6%),25 (14.0%),0.868,chi_square,N/A
+none_of_above,0 (0.0%),0 (0.0%),1.000,fisher_exact,N/A
+40d_dropout,28 (31.1%),63 (35.2%),0.595,chi_square,N/A
+wl_40d_%,-7.67 ± 3.49 (n=62),-8.34 ± 3.09 (n=116),0.192,anova,G1vsG2: 0.206
+40d_fat_loss_%,-4.32 ± 2.04 (n=62),-4.82 ± 2.00 (n=116),0.113,anova,G1vsG2: 0.250
+40d_muscle_change_%,2.50 ± 1.28 (n=62),2.86 ± 1.33 (n=116),0.086,anova,G1vsG2: -0.271
+60d_dropout,43 (47.8%),96 (53.6%),0.437,chi_square,N/A
+wl_60d_%,-9.97 ± 4.02 (n=47),-10.60 ± 3.28 (n=83),0.335,anova,G1vsG2: 0.177
+60d_fat_loss_%,-5.48 ± 2.20 (n=47),-6.08 ± 2.13 (n=83),0.127,anova,G1vsG2: 0.280
+60d_muscle_change_%,3.12 ± 1.36 (n=47),3.57 ± 1.40 (n=83),0.072,anova,G1vsG2: -0.331
+80d_dropout,57 (63.3%),116 (64.8%),0.918,chi_square,N/A
+wl_80d_%,-11.48 ± 4.66 (n=33),-11.74 ± 3.04 (n=63),0.741,anova,G1vsG2: 0.071
+80d_fat_loss_%,-6.37 ± 2.55 (n=33),-6.73 ± 2.11 (n=63),0.465,anova,G1vsG2: 0.158
+80d_muscle_change_%,3.57 ± 1.50 (n=33),3.90 ± 1.36 (n=63),0.275,anova,G1vsG2: -0.236
+5%_wl_achieved,71 (78.9%),126 (70.4%),0.180,chi_square,N/A
+days_to_5%_wl,24.49 ± 20.80 (n=71),19.79 ± 11.25 (n=126),0.385,kruskal_wallis,G1vsG2: 0.306
+10%_wl_achieved,39 (43.3%),81 (45.3%),0.866,chi_square,N/A
+days_to_10%_wl,54.82 ± 30.21 (n=39),49.78 ± 21.13 (n=81),0.689,kruskal_wallis,G1vsG2: 0.206
+15%_wl_achieved,20 (22.2%),32 (17.9%),0.492,chi_square,N/A
+days_to_15%_wl,96.60 ± 37.55 (n=20),91.44 ± 34.97 (n=32),0.933,kruskal_wallis,G1vsG2: 0.144
