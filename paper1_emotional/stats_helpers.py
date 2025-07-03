@@ -47,31 +47,31 @@ def format_availability(series):
     return f"{available_count} ({perc:.1f}%)"
 
 def welchs_ttest(series1, series2):
-    """Performs Welch's t-test and returns a formatted p-value."""
+    """Performs Welch's t-test and returns the raw p-value."""
     s1 = pd.to_numeric(series1, errors='coerce').dropna()
     s2 = pd.to_numeric(series2, errors='coerce').dropna()
     if len(s1) < 2 or len(s2) < 2:
-        return "N/A"
+        return np.nan
     _, p_val = ttest_ind(s1, s2, equal_var=False, nan_policy='omit')
-    return f"{p_val:.3f}" if p_val >= 0.001 else "<0.001"
+    return p_val
 
 def categorical_pvalue(series1, series2):
-    """Performs Chi-squared test and returns a formatted p-value."""
+    """Performs Chi-squared test and returns the raw p-value."""
     s1 = series1.dropna()
     s2 = series2.dropna()
     if s1.empty or s2.empty:
-        return "N/A"
+        return np.nan
     contingency_table = pd.crosstab(
         index=np.concatenate([np.zeros(len(s1)), np.ones(len(s2))]),
         columns=np.concatenate([s1, s2])
     )
     if contingency_table.shape[0] < 2 or contingency_table.shape[1] < 2:
-        return "N/A" # Not enough data for a 2x2 table
+        return np.nan # Not enough data for a 2x2 table
     try:
-        chi2, p_val, _, _ = chi2_contingency(contingency_table)
-        return f"{p_val:.3f}" if p_val >= 0.001 else "<0.001"
+        _, p_val, _, _ = chi2_contingency(contingency_table)
+        return p_val
     except ValueError: # Catches errors with all 0s in a row/col
-        return "N/A"
+        return np.nan
 
 # ==============================================================================
 # 2. BOOTSTRAPPING WORKER FUNCTIONS (FOR PARALLELIZATION)
@@ -110,37 +110,62 @@ def _permutation_p_worker(data_tuple, var_type):
 def run_bootstrap_comparison(series1, series2, vtype, n_iterations=5000, run_bootstrap=True):
     """
     Compares two series using standard statistical tests and optional bootstrapping.
-    
-    ... (your docstring) ...
-    
-    Args:
-        ...
-        run_bootstrap (bool): If True, performs bootstrapping. If False, only runs the standard test.
+    Returns a dictionary containing raw numerical results.
     """
-    # --- Standard p-value calculation (this part always runs) ---
-    # ... your existing code for t-test, chi-squared, etc. ...
-    std_p_value = ... # Calculate this as before
+    s1 = pd.to_numeric(series1, errors='coerce').dropna()
+    s2 = pd.to_numeric(series2, errors='coerce').dropna()
+
+    # --- Standard p-value calculation (always runs) ---
+    if vtype == 'continuous':
+        std_p_value = welchs_ttest(s1, s2)
+    else: # categorical
+        std_p_value = categorical_pvalue(s1, s2)
 
     results = {
         'std_p': std_p_value,
-        'boot_p': "N/A",
-        'boot_ci_low': "N/A",
-        'boot_ci_high': "N/A"
+        'boot_p': np.nan,
+        'boot_ci_low': np.nan,
+        'boot_ci_high': np.nan,
+        'obs_diff': np.nan
     }
 
     # --- Conditional bootstrapping ---
     if run_bootstrap:
-        # ... your existing bootstrapping logic goes here ...
-        # For example:
-        # diffs = []
-        # for _ in range(n_iterations):
-        #     ...
-        # boot_p = ...
-        # boot_ci_low, boot_ci_high = ...
+        if s1.empty or s2.empty:
+            return results # Not enough data for bootstrapping
+
+        # Observed difference
+        obs_diff = s1.mean() - s2.mean()
+        results['obs_diff'] = obs_diff
+
+        # Setup for parallel processing
+        n_cpu = cpu_count()
+        pool = Pool(processes=n_cpu)
+
+        # Permutation test for p-value
+        pooled_data = pd.concat([s1, s2], ignore_index=True)
+        perm_args = [(pooled_data, len(s1), len(s2))] * n_iterations
+        perm_diffs = pool.starmap(_permutation_p_worker, [(arg, vtype) for arg in perm_args])
+        perm_diffs = np.array(perm_diffs)
         
-        # Update the results dictionary
-        results['boot_p'] = boot_p
-        results['boot_ci_low'] = boot_ci_low
-        results['boot_ci_high'] = boot_ci_high
+        # Calculate p-value
+        if obs_diff >= 0:
+            p_val_boot = (np.sum(perm_diffs >= obs_diff) + 1) / (n_iterations + 1)
+        else:
+            p_val_boot = (np.sum(perm_diffs <= obs_diff) + 1) / (n_iterations + 1)
+        results['boot_p'] = p_val_boot
+
+        # Bootstrap for Confidence Interval
+        ci_args = [(s1, s2)] * n_iterations
+        ci_diffs = pool.starmap(_bootstrap_ci_worker, [(arg, vtype) for arg in ci_args])
+        ci_diffs = np.array(ci_diffs)
+        
+        # Calculate CI
+        ci_low, ci_high = np.nanpercentile(ci_diffs, [2.5, 97.5])
+        results['boot_ci_low'] = ci_low
+        results['boot_ci_high'] = ci_high
+        
+        pool.close()
+        pool.join()
 
     return results
