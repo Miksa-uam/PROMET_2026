@@ -1,15 +1,20 @@
 # p2_config.py
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
 
 @dataclass
 class paths_config:
     source_dir: str # Raw and pre-processed PNK databases - DB2_standard folder
     source_db: str # The specific, filtered source database - pnk_db2_filtered
     paper_dir: str # Paper-specific files and code folder
+    # paper_filter_criteria: str
     paper_in_db: str  # The input database created and used in a specific research paper
     paper_out_db: str  # The output database created and used in a specific research paper
-    
+
+@dataclass
+class filtering_config:
+    filtering_sql_query: str # SQL query to select patient-medical record combinations for paper-specific analysis
+
 @dataclass
 class timetoevent_config:
     # paper_in_db: str  # The input database created and used in a specific research paper
@@ -24,6 +29,10 @@ class timetoevent_config:
     followup_columns: List[str] # Columns containing follow-up data
     predictor_columns: List[str] # Columns containing predictor data
 
+@dataclass
+class timetoevent_subsetting_config:
+    source_table: str
+    definitions: Dict[str, List[str]] = field(default_factory=dict)
 
 @dataclass
 class master_config:
@@ -32,5 +41,7 @@ class master_config:
     Some are analysis-specific, so we leave these with a default value of None, 
     that only needs to be set when the specific analysis is run.
     """
-    paths: paths_config = None
-    timetoevent: timetoevent_config = None
+    paths: Optional[paths_config] = None
+    filtering: Optional[filtering_config] = None
+    timetoevent: Optional[timetoevent_config] = None
+    timetoevent_subsetting: Optional[timetoevent_subsetting_config] = None

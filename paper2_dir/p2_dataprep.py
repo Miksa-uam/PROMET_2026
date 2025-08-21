@@ -1,29 +1,25 @@
-# p2_dataprep.py
-
+"""
+0. IMPORTS  
+"""
 import sqlite3
 import pandas as pd
 import numpy as np
 from datetime import timedelta
 from paper_config import paths_config, timetoevent_config, master_config
 
-# describe
+# BREAKPOINTS: docstrings missing
 
-def paper2_database_subset(config: paths_config) -> None:
+"""
+1. CREATE A RESEARCH PROJECT-SPECIFIC SQL DATABASE SUBSET
+"""
+
+def paper_database_subset(config: master_config) -> None:
     """Create a Paper 2-specific SQL database subset"""
     # Connect to the source database
-    source_conn = sqlite3.connect(config.source_db)
+    source_conn = sqlite3.connect(config.paths.source_db)
 
-    # Identify patient-medical record combinations to include in the analysis. 
-    # To identify patients that satisfy the following criteria:
-    # gdpr4 = 1, gdpr10 = 0 and medical_record_sequence = 1 in medical_records_filtered -> to only use first records of PROMET CONNECT patients. 
-    # query: 
-        # WHERE gdpr4 = 1
-        #   AND gdpr10 = 0
-        #   AND medical_record_sequence = 1
-    sql_select_ids = """
-        SELECT medical_record_id, patient_id
-        FROM medical_records_filtered
-    """
+    # Identify patient-medical record combinations to include in the analysis, based on a configurable SQL filtering query
+    sql_select_ids = config.filtering.filtering_sql_query
 
     records = pd.read_sql_query(sql_select_ids, source_conn)
     record_ids = tuple(records['medical_record_id'])
@@ -37,7 +33,7 @@ def paper2_database_subset(config: paths_config) -> None:
     }
 
     # Create new SQLite database connection to write filtered data.
-    p2_in_conn = sqlite3.connect(config.paper_in_db)
+    p2_in_conn = sqlite3.connect(config.paths.paper_in_db)
 
     for src_table, (dst_table, mr_ids) in table_mapping.items():
         # Prepare filtering query for tables that include 'medical_record_id'
@@ -71,16 +67,16 @@ def paper2_database_subset(config: paths_config) -> None:
     # print(f"Filtered data has been saved to {new_db_path}.")
     # print(f"Total first-record combinations: {len(records)} from {len(set(records['patient_id']))} patients.")
 
-    print(f"Data has been saved to {config.paper_in_db}.")
+    print(f"Data has been saved to {config.paths.paper_in_db}.")
     print(f"Total records: {len(records)} from {len(set(records['patient_id']))} patients.")
 
-
-
-# describe
-
 """
-1. CONFIGURATION
+2. CREATE A TIME-TO-EVENT TYPE DATA TABLE IN THE PROJECT-SPECIFIC DATABASE SUBSET
 """
+
+'''
+2a. helper functions - final column ordering, data loading, identifying baseline measurements to merge with medical records 
+'''
 
 def make_column_order(config: timetoevent_config) -> list:
     """Generates the final column order based on the provided configuration."""
@@ -103,9 +99,6 @@ def make_column_order(config: timetoevent_config) -> list:
     cols += config.predictor_columns
     return cols
 
-"""
-2. DATA LOADING
-"""
 def load_measurements(conn, config: timetoevent_config) -> pd.DataFrame:
     # Consider selecting only necessary columns if measurements_p1 has many unused ones
     cols_to_fetch = ["patient_id", "medical_record_id", "measurement_date", 
@@ -126,11 +119,8 @@ def load_med_records(conn, config: timetoevent_config) -> pd.DataFrame:
     df = pd.read_sql(sql_query, conn)
     return df
 
-"""
-3. BASELINE & MERGE (No major changes here, but ensure it's efficient)
-"""
 def extract_baseline(meas: pd.DataFrame) -> pd.DataFrame:
-    base = meas[meas["first_in_record"] == 1].copy() # .copy() is good here
+    base = meas[meas["first_in_record"] == 1].copy()
     base = base.rename(columns={
         "measurement_date": "baseline_date",
         "weight_kg": "baseline_weight_kg",
@@ -148,15 +138,13 @@ def merge_baseline_and_records(baseline, recs):
     df = baseline.merge(recs, on=["patient_id", "medical_record_id"], how="left")
     return df
 
-"""
-4. CALCULATIONS (Functions refactored for clarity and to work with grouped data)
-"""
-# calc_overall_followup: Largely similar, but operates on pre-grouped, pre-sorted data.
-# Ensure baseline_row_info is a pd.Series (which it will be from indexed lookup)
+'''
+2b. time-to-event type calculations - overall followup, outcome-at-timestamp, time-to-target data
+'''
 
 def calc_overall_followup(patient_record_measurements: pd.DataFrame, 
-                          baseline_row_info: pd.Series,
-                          config: timetoevent_config) -> pd.Series:
+                          baseline_row_info: pd.Series
+                          ) -> pd.Series:
     baseline_date = baseline_row_info["baseline_date"]
     
     followup_measurements = patient_record_measurements[
@@ -202,7 +190,6 @@ def calc_overall_followup(patient_record_measurements: pd.DataFrame,
         last["avg_days_between_measurements"] = np.nan
     return last
 
-# calc_fixed_timepoints: Operates on pre-grouped data.
 def calc_fixed_timepoints(patient_record_measurements: pd.DataFrame, 
                           baseline_row_info: pd.Series, 
                           config: timetoevent_config) -> dict:
@@ -251,7 +238,6 @@ def calc_fixed_timepoints(patient_record_measurements: pd.DataFrame,
             out[f"days_to_{prefix}_measurement"] = (take.measurement_date - baseline_date).days + 1
     return out
 
-# calc_time_to_targets: CRITICAL REFACTOR - removed inner iterrows()
 def calc_time_to_targets(patient_record_measurements: pd.DataFrame, 
                          baseline_row_info: pd.Series, 
                          config: timetoevent_config) -> dict:
@@ -290,9 +276,9 @@ def calc_time_to_targets(patient_record_measurements: pd.DataFrame,
             out[f"days_to_{t}%_wl"] = np.nan
     return out
 
-"""
-5. ORCHESTRATION (Refactored main loop)
-"""
+'''
+2c. orchestration function - bring everything together
+'''
 
 def build_timetoevent_table(config: master_config):
     # 1. Get configs from the master object
@@ -359,9 +345,58 @@ def build_timetoevent_table(config: master_config):
     # df_out.reindex might introduce NaNs. This should be fine.
     df_out = df_out.reindex(columns=output_column_order)
 
-    # 4. Save to the output database defined in the config
-    conn_out = sqlite3.connect(paths_config.paper_out_db)
+    # 4. Save to the same input database defined in the config - this is still considered an 'input' of downstream analyses, so keep it there
+    conn_out = sqlite3.connect(paths_config.paper_in_db)
     df_out.to_sql(timetoevent_config.output_table, conn_out, if_exists="replace", index=False)
     conn_out.close()
 
-    print(f"Saved {len(df_out)} rows to {paths_config.paper_out_db}::{timetoevent_config.output_table}")
+    print(f"Saved {len(df_out)} rows to {paths_config.paper_in_db}::{timetoevent_config.output_table}")
+
+"""
+3. SUBSET TIME-TO-EVENT TABLE FOR SPECIFIC SUBCOHORTS - LIKE WGC COMPLETE, GENOMICS AVAILABLE
+"""
+
+
+
+# p2_dataprep.py
+
+# ... (add this function to your module) ...
+
+def subset_timetoevent_table(config: master_config) -> None:
+    """
+    Creates subset tables from a source table based on a dictionary of definitions.
+    """
+    if not config.timetoevent_subsetting or not config.timetoevent_subsetting.definitions:
+        print("Subsetting configuration not provided or is empty. Skipping.")
+        return
+    
+    db_path = config.paths.paper_in_db
+    source_table = config.timetoevent_subsetting.source_table
+    subset_definitions = config.timetoevent_subsetting.definitions
+
+    print(f"\n--- Starting Table Subsetting from '{source_table}' ---")
+    
+    try:
+        with sqlite3.connect(db_path) as conn:
+            source_df = pd.read_sql_query(f"SELECT * FROM {source_table}", conn)
+
+            # Iterate directly over the dictionary of definitions
+            for output_table, columns_to_check in subset_definitions.items():
+                
+                # Check if all required columns exist in the DataFrame
+                missing_cols = [col for col in columns_to_check if col not in source_df.columns]
+                if missing_cols:
+                    print(f"  - Warning: Skipping table '{output_table}' because columns {missing_cols} were not found.")
+                    continue
+
+                # Filter the DataFrame and save it
+                subset_df = source_df.dropna(subset=columns_to_check).copy()
+                subset_df.to_sql(output_table, conn, if_exists="replace", index=False)
+                
+                print(f"  - Saved {len(subset_df)} rows to table '{output_table}' (filtered on: {columns_to_check})")
+
+    except Exception as e:
+        print(f"An error occurred during subsetting: {e}")
+    
+    print("--- Table Subsetting Complete ---")
+
