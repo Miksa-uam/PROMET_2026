@@ -1,6 +1,10 @@
 # p2_config.py
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
+
+"""
+1. DATA PREPARATION CONFIGS
+"""
 
 @dataclass
 class paths_config:
@@ -17,8 +21,6 @@ class filtering_config:
 
 @dataclass
 class timetoevent_config:
-    # paper_in_db: str  # The input database created and used in a specific research paper
-    # paper_out_db: str  # The output database created and used in a specific research paper
     input_measurements: str # The input measurements used in the time-to-event type table
     input_records: str # The input medical records used in the time-to-event type table
     output_table: str # The output table for the time-to-event type analysis, within the output database
@@ -34,6 +36,31 @@ class timetoevent_subsetting_config:
     source_table: str
     definitions: Dict[str, List[str]] = field(default_factory=dict)
 
+"""
+2. DATA ANALYSIS CONFIGS
+"""
+
+@dataclass
+class descriptive_comparisons_config:
+    """A streamlined config for a single descriptive comparison analysis."""
+    analysis_name: str
+    input_cohort_name: str
+    mother_cohort_name: str
+    
+    # Row order for tables (variable name and pretty name)
+    row_order: List[Tuple[str, str]]
+    
+    # Settings for demographic stratification
+    demographic_output_table: str
+    demographic_strata: List[str]
+    
+    # Settings for WGC stratification
+    wgc_output_table: str
+    wgc_strata: List[str] # This can be left empty if not needed
+
+    # Optional plot filename
+    bias_plot_filename: Optional[str] = None
+
 @dataclass
 class master_config:
     """
@@ -45,3 +72,6 @@ class master_config:
     filtering: Optional[filtering_config] = None
     timetoevent: Optional[timetoevent_config] = None
     timetoevent_subsetting: Optional[timetoevent_subsetting_config] = None
+    # this should be optional
+    descriptive_comparisons: List[descriptive_comparisons_config] = field(default_factory=list)
+

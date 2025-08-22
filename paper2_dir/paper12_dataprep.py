@@ -5,7 +5,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 from datetime import timedelta
-from paper_config import paths_config, timetoevent_config, master_config
+from paper12_config import paths_config, timetoevent_config, master_config
 
 # BREAKPOINTS: docstrings missing
 
