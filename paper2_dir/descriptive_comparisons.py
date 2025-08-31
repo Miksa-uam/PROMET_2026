@@ -9,98 +9,7 @@ from paper12_config import descriptive_comparisons_config, master_config
 
 
 # =========================
-# 1. CONFIGURATION
-# =========================
-
-# # --- Create a directory for outputs if it doesn't exist ---
-# paper2_directory = "."
-# plots_directory = os.path.join(paper2_directory, "cohort_comp_data_collection_bias_plots")
-# os.makedirs(plots_directory, exist_ok=True)
-
-# INPUT_DB = os.path.join(paper2_directory, "pnk_db2_p2_in.sqlite")
-# OUTPUT_DB = os.path.join(paper2_directory, "pnk_db2_p2_out.sqlite")
-
-# # --- Uncomment the desired cohort configuration to run ---
-
-# # CONFIG 1: FULL WGC COHORT (Faster, no bootstrapping)
-# INPUT_COHORT_NAME = "timetoevent_wgc_compl"
-# MOTHER_COHORT_NAME = "timetoevent_all"
-# DEMOGRAPHIC_OUTPUT_TABLE = "wgc_cmpl_dmgrph_strt"
-# WGC_OUTPUT_TABLE = "wgc_cmpl_wgc_strt"
-# PLOT_OUTPUT_FILE = os.path.join(plots_directory, "wgc_cmpl_datacollection_bias.png")
-
-# # CONFIG 2: FULL WGC + Genomics COHORT (Slower, with bootstrapping)
-# # INPUT_COHORT_NAME = "timetoevent_wgc_gen_compl"
-# # MOTHER_COHORT_NAME = "timetoevent_wgc_compl"
-# # DEMOGRAPHIC_OUTPUT_TABLE = "wgc_gen_cmpl_dmgrph_strt"
-# # WGC_OUTPUT_TABLE = "wgc_gen_cmpl_wgc_strt"
-# # PLOT_OUTPUT_FILE = os.path.join(plots_directory, "wgc_gen_cmpl_datacollection_bias.png")
-
-# TIME_WINDOWS = [40, 60, 80]
-# WL_TARGETS = [5, 10, 15]
-
-# # Row order and pretty names
-# ROW_ORDER = [
-#     ("N", "N"),
-#     # Demographics & baseline anthropometry
-#     ("delim_demo", "Demographics and baseline anthropometry"),
-#     ("sex_f", "Sex (% of females)"),
-#     ("age", "Age (years)"),
-#     ("height_m", "Height (m)"),
-#     ("baseline_weight_kg", "Baseline weight (kg)"),
-#     ("baseline_bmi", "Baseline BMI (kg/m²)"),
-#     ("baseline_fat_%", "Baseline fat mass (%)"),
-#     ("baseline_muscle_%", "Baseline muscle mass (%)"),
-#     # Treatment outcomes
-#     ("delim_outcomes", "Treatment outcomes"),
-#     ("total_followup_days", "Follow-up length (days)"),
-#     ("dietitian_visits", "Number of visits"),
-#     ("nr_total_measurements", "Number of total measurements"),
-#     ("avg_days_between_measurements", "Average measurement frequency (days)"),
-#     ("last_aval_weight_kg", "Last measured weight (kg)"),
-#     ("total_wl_kg", "Total weight loss (kg)"),
-#     ("total_wl_%", "Total weight loss (%)"),
-#     ("final_bmi", "Final BMI (kg/m²)"),
-#     ("bmi_reduction", "BMI reduction (kg/m²)"),
-#     ("last_aval_fat_%", "Last measured fat mass (%)"),
-#     ("total_fat_loss_%", "Total fat mass loss (%)"),
-#     ("last_aval_muscle_%", "Last measured muscle mass (%)"),
-#     ("total_muscle_change_%", "Total muscle mass change (%)"),
-#     ("instant_dropout", "Instant dropouts (n)"),
-# ]
-# # Add dynamic time window and WL target variables
-# for w in TIME_WINDOWS:
-#     ROW_ORDER += [
-#         (f"{w}d_dropout", f"{w}-day dropouts (n)"),
-#         (f"{w}d_wl_%", f"{w}-day weight loss (%)"),
-#         (f"{w}d_bmi_reduction", f"{w}-day BMI reduction (kg/m²)"),
-#         (f"{w}d_fat_loss_%", f"{w}-day fat mass loss (%)"),
-#         (f"{w}d_muscle_change_%", f"{w}-day muscle mass change (%)"),
-#     ]
-# for t in WL_TARGETS:
-#     ROW_ORDER += [
-#         (f"{t}%_wl_achieved", f"Achieved {t}% weight loss (n)"),
-#         (f"days_to_{t}%_wl", f"Days to {t}% weight loss"),
-#     ]
-# ROW_ORDER += [
-#     # Weight gain causes
-#     ("delim_wgc", "Self-reported causes of weight gain"),
-#     ("womens_health_and_pregnancy", "Women's health and pregnancy (yes/no)"),
-#     ("mental_health", "Mental health (yes/no)"),
-#     ("family_issues", "Family issues (yes/no)"),
-#     ("medication_disease_injury", "Medication, disease or injury (yes/no)"),
-#     ("physical_inactivity", "Physical inactivity (yes/no)"),
-#     ("eating_habits", "Eating habits (yes/no)"),
-#     ("schedule", "Schedule (yes/no)"),
-#     ("smoking_cessation", "Smoking cessation (yes/no)"),
-#     ("treatment_discontinuation_or_relapse", "Treatment discontinuation or relapse (yes/no)"),
-#     ("pandemic", "COVID-19 pandemic (yes/no)"),
-#     ("lifestyle_circumstances", "Lifestyle circumstances (yes/no)"),
-#     ("none_of_above", "None of the above (yes/no)"),
-# ]
-
-# =========================
-# 2. HELPER FUNCTIONS
+# 1. HELPER FUNCTIONS
 # =========================
 
 def format_mean_sd(series):
@@ -168,7 +77,21 @@ def categorical_pvalue(series1, series2):
 
 def get_cause_cols(row_order: list) -> list:
     """Identifies weight gain cause columns from the ROW_ORDER config."""
-    wgc_cols = []
+    wgc_cols = [
+        # "womens_health_and_pregnancy",
+        # "mental_health",
+        # "family_issues",
+        # "medication_disease_injury",
+        # "physical_inactivity",
+        # "eating_habits",
+        # "schedule",
+        # "smoking_cessation",
+        # "treatment_discontinuation_or_relapse",
+        # "pandemic",
+        # "lifestyle_circumstances",
+        # "none_of_above"
+    ]
+
     in_wgc_section = False
     for var, _ in row_order:
         if var == "delim_wgc":
@@ -219,14 +142,8 @@ def add_empty_rows_and_pretty_names(summary_rows, pretty_names):
         all_columns.update(summary_rows[0].keys())
 
     new_rows = []
-    cause_cols_list = get_cause_cols(pretty_names)
 
     for var, pretty in pretty_names:
-        if var.startswith("delim_wgc"):
-            break
-        if var in cause_cols_list:
-            continue
-
         if var.startswith("delim_"):
             row = {col: "" for col in all_columns}
             row["Variable"] = pretty
@@ -269,7 +186,7 @@ def perform_comparison(g0, g1, var, vtype):
     return p_value
 
 # =========================
-# 3. PLOTTING FUNCTION
+# 2. PLOTTING FUNCTION
 # =========================
 
 def plot_datacollection_bias(df_cohort, df_mother, cohort_name, mother_cohort_name, output_file):
@@ -305,7 +222,7 @@ def plot_datacollection_bias(df_cohort, df_mother, cohort_name, mother_cohort_na
     print(f"Data collection bias plot saved to {output_file}")
 
 # =========================
-# 4. STRATIFIED COMPARISON FUNCTIONS
+# 3. STRATIFIED COMPARISON FUNCTIONS
 # =========================
 
 def demographic_stratification(df, df_mother, config: descriptive_comparisons_config, conn):
@@ -341,8 +258,6 @@ def demographic_stratification(df, df_mother, config: descriptive_comparisons_co
 
     for i, (var, _) in enumerate(row_order):
         if var == "N" or var.startswith("delim_"):
-            continue
-        if var in cause_cols:
             continue
         print(f"  Processing variable {i}/{len(row_order)}: {var}")
 
@@ -425,7 +340,7 @@ def wgc_stratification(df, config: descriptive_comparisons_config, conn):
     print(f"Weight gain cause stratification table saved to {config.wgc_output_table}")
 
 # =========================
-# 5. MAIN PIPELINE
+# 4. MAIN PIPELINE
 # =========================
 
 def run_descriptive_comparisons(master_config: master_config):
