@@ -60,6 +60,7 @@ def generate_logreg_scenarios(
     """
     scenarios = []
     # Add weight gain cause columns if needed
+    current_predictors = list(main_predictors)
     wgc_predictors = []
     if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
         cols = list(df_all.columns)
@@ -67,7 +68,9 @@ def generate_logreg_scenarios(
             start = cols.index('weight_gain_cause_en') + 1
             end = cols.index('genomics_sample_id')
             wgc_predictors = cols[start:end]
-            main_predictors = list(main_predictors) + wgc_predictors
+            for pred in wgc_predictors:
+                if pred not in current_predictors:
+                    current_predictors.append(pred)
 
     for outcome_type in outcome_types:
         for tw in time_windows:
@@ -79,7 +82,7 @@ def generate_logreg_scenarios(
                 continue
                 
             for target_perc in target_percs:
-                for predictor in main_predictors:
+                for predictor in current_predictors:
                     for covariates, adj_label in adjustment_sets:
                         name_parts = []
                         time_label = f"{tw}d" if isinstance(tw, int) else tw
@@ -262,6 +265,7 @@ def generate_linreg_scenarios(
     If input_table == "timetoevent_eb_wgc_compl", includes all weight gain cause columns as predictors.
     """
     scenarios = []
+    current_predictors = list(main_predictors)
     # Add weight gain cause columns if needed
     wgc_predictors = []
     if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
@@ -269,11 +273,13 @@ def generate_linreg_scenarios(
         start = cols.index('weight_gain_cause_en') + 1
         end = cols.index('genomics_sample_id')
         wgc_predictors = cols[start:end]
-        main_predictors = list(main_predictors) + wgc_predictors
+        for pred in wgc_predictors:
+            if pred not in current_predictors:
+                current_predictors.append(pred)
 
     for outcome_type in outcome_types:
         for tw in time_windows:
-            for predictor in main_predictors:
+            for predictor in current_predictors:
                 for covariates, adj_label in adjustment_sets:
                     name_parts = []
                     time_label = f"{tw}d" if isinstance(tw, int) else tw
@@ -291,7 +297,6 @@ def generate_linreg_scenarios(
                     scenarios.append(scenario)
     return scenarios
 
-
 def define_linreg_outcome(df, scenario):
     """
     Create continuous outcome column for the scenario.
@@ -303,7 +308,7 @@ def define_linreg_outcome(df, scenario):
     tw = scenario['time_window']
     # Define outcome column names in your data accordingly
     if outcome_type == 'weight_change':
-        col = f"wl_{tw}d_%" if isinstance(tw, int) else "total_wl_%"
+        col = f"{tw}d_wl_%" if isinstance(tw, int) else "total_wl_%"
     elif outcome_type == 'fat_change':
         col = f"{tw}d_fat_loss_%" if isinstance(tw, int) else "total_fat_loss_%"
     elif outcome_type == 'muscle_change':
@@ -397,6 +402,7 @@ def generate_adherence_scenarios(
     """
     scenarios = []
 
+    current_predictors = list(main_predictors)
     # Dynamically add weight gain cause predictors if appropriate
     wgc_predictors = []
     if input_table in ("timetoevent_eb_wgc_compl", "timetoevent_wgc_compl") and df_all is not None:
@@ -404,9 +410,9 @@ def generate_adherence_scenarios(
         start = cols.index('weight_gain_cause_en') + 1
         end = cols.index('genomics_sample_id')
         wgc_predictors = cols[start:end]
-        all_predictors = list(main_predictors) + wgc_predictors
-    else:
-        all_predictors = list(main_predictors)
+        for pred in wgc_predictors:
+            if pred not in current_predictors:
+                current_predictors.append(pred)
 
     # All outcomes except days_to_X%_wl
     static_outcomes = [
@@ -420,7 +426,7 @@ def generate_adherence_scenarios(
 
     # Scenarios for static outcomes
     for outcome in static_outcomes:
-        for predictor in all_predictors:
+        for predictor in current_predictors:
             for covariates, adj_label in adjustment_sets:
                 name = f"{outcome}_{predictor.replace('_likert','').replace('_yn','')}_{adj_label}"
                 scenario = {
@@ -434,7 +440,7 @@ def generate_adherence_scenarios(
     # Scenarios for days_to_X%_wl
     for perc in target_percentages:
         outcome = f"days_to_{perc}%_wl"
-        for predictor in all_predictors:
+        for predictor in current_predictors:
             for covariates, adj_label in adjustment_sets:
                 name = f"{outcome}_{predictor.replace('_likert','').replace('_yn','')}_{adj_label}"
                 scenario = {
