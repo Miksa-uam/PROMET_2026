@@ -72,6 +72,9 @@ class paper2_rf_config:
     predictors: List[str]
     covariates: List[str] = field(default_factory=list)
 
+    # --- Model Hyperparameter Tuning ---
+    run_hyperparameter_tuning: bool = False # Default is OFF
+    
     # --- Classifier-Specific Parameters ---
     classifier_threshold: Optional[float] = None
     threshold_direction: Optional[str] = None # 'greater_than_or_equal' or 'less_than_or_equal'

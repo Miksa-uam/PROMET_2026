@@ -6,13 +6,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import shap
+from packaging import version
 
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import f1_score, roc_auc_score, roc_curve, mean_squared_error
 from sklearn.inspection import permutation_importance
 
 from paper12_config import paper2_rf_config
+
 
 class RandomForestAnalyzer:
     """A reusable engine for running RF feature importance analyses."""
@@ -62,14 +65,48 @@ class RandomForestAnalyzer:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             X, y, test_size=0.3, stratify=y if self.config.model_type == 'classifier' else None, random_state=42
         )
-
-        # Initialize and train model
-        if self.config.model_type == 'classifier':
-            self.model = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=42, n_jobs=-1)
-        else: # regressor
-            self.model = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
         
-        self.model.fit(self.X_train, self.y_train)
+        # Initialize a base model instance
+        if self.config.model_type == 'classifier':
+            base_model = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=42, n_jobs=-1)
+        else: # regressor
+            base_model = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+
+        # Conditionally run hyperparameter tuning
+        if self.config.run_hyperparameter_tuning:
+            print(">>> Running GridSearchCV for hyperparameter tuning...")
+            
+            # Define a focused parameter grid to search
+            param_grid = {
+                'max_depth': [5, 10, 20, None],
+                'min_samples_leaf': [2, 4, 8],
+                'min_samples_split': [5, 10, 20]
+            }
+            
+            # Set up the grid search with 5-fold cross-validation
+            # It uses all available CPU cores (n_jobs=-1)
+            grid_search = GridSearchCV(
+                estimator=base_model,
+                param_grid=param_grid,
+                cv=5,
+                n_jobs=-1,
+                scoring='roc_auc' if self.config.model_type == 'classifier' else 'neg_mean_squared_error',
+                verbose=1 # Set to 1 to see progress
+            )
+            
+            # Fit the grid search to find the best model
+            grid_search.fit(self.X_train, self.y_train)
+            
+            # Set the class model to the best one found
+            self.model = grid_search.best_estimator_
+            print(f">>> Best params found: {grid_search.best_params_}")
+            
+        else:
+            # If not tuning, just fit the base model as before
+            print(">>> Skipping hyperparameter tuning. Using default model.")
+            self.model = base_model
+            self.model.fit(self.X_train, self.y_train)
+
         print("Model training complete.")
 
         # --- Calculate and Store Results ---
@@ -90,9 +127,26 @@ class RandomForestAnalyzer:
         perm_imp = permutation_importance(self.model, self.X_test, self.y_test, n_repeats=10, random_state=42, n_jobs=-1)
         self.results['permutation_importance'] = pd.Series(perm_imp.importances_mean, index=all_predictors)
         
-        # SHAP Values
-        explainer = shap.TreeExplainer(self.model)
-        self.results['shap_values'] = explainer(self.X_test)
+        # SHAP values () as Explanation)
+        try:
+            if self.config.model_type == 'classifier':
+                # Interventional with background enables model_output='probability'
+                bg = self.X_train.sample(min(1000, len(self.X_train)), random_state=42)
+                explainer = shap.TreeExplainer(
+                    self.model,
+                    data=bg,
+                    feature_perturbation="interventional",
+                    model_output="probability"
+                )
+            else:
+                explainer = shap.TreeExplainer(self.model)  # raw for regressors
+            sv = explainer(self.X_test)  # shap.Explanation
+        except Exception:
+            # Fallback: tree_path_dependent + raw output (fast and stable)
+            explainer = shap.TreeExplainer(self.model)
+            sv = explainer(self.X_test)
+        self.results['shap_explanation'] = sv  # unify on this key
+
         print("All calculations complete.")
 
     def _plot_importance(self, importance_series, title, file_name):
@@ -132,25 +186,88 @@ class RandomForestAnalyzer:
         plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_roc_curve.png"), dpi=300)
         plt.show()
 
+    def _shap_explanation_for_positive_class(self, exp):
+        vals = np.array(exp.values)
+        if self.config.model_type == 'classifier' and vals.ndim == 3:
+            cls_idx = list(self.model.classes_).index(1)
+            return shap.Explanation(
+                values=exp.values[..., cls_idx],
+                base_values=np.array(exp.base_values)[..., cls_idx],
+                data=exp.data,
+                feature_names=exp.feature_names
+            )
+        return exp
+
     def plot_shap_summary(self):
-        """Plots the SHAP beeswarm summary plot."""
-        shap.summary_plot(self.results['shap_values'], self.X_test, show=False)
+        exp = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+        shap.plots.beeswarm(exp, show=False)
         plt.title(f"{self.config.analysis_name}: SHAP Summary")
         plt.tight_layout()
         plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_summary.png"), dpi=300)
+        plt.show()
+
+    def plot_feature_importance_grid(self):
+        print("Generating 2x2 feature importance grid...")
+        if version.parse(shap.__version__) < version.parse("0.41.0"):
+            raise RuntimeError(f"SHAP {shap.__version__} detected. Upgrade to >= 0.41 for shap.plots.* API.")
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, axs = plt.subplots(2, 2, figsize=(20, 18))
+        fig.suptitle(f"Feature Importance Analysis: {self.config.analysis_name}", fontsize=20, fontweight='bold')
+
+        # 1) Gini
+        gini_fi = self.results['gini_importance'].sort_values()
+        axs[0, 0].barh(range(len(gini_fi)), gini_fi.values)
+        axs[0, 0].set_yticks(range(len(gini_fi)))
+        axs[0, 0].set_yticklabels([self.config.nice_names.get(f, f) for f in gini_fi.index])
+        axs[0, 0].set_title("Gini Importance")
+        axs[0, 0].set_xlabel("Importance")
+
+        # 2) Permutation
+        perm_fi = self.results['permutation_importance'].sort_values()
+        axs[0, 1].barh(range(len(perm_fi)), perm_fi.values)
+        axs[0, 1].set_yticks(range(len(perm_fi)))
+        axs[0, 1].set_yticklabels([self.config.nice_names.get(f, f) for f in perm_fi.index])
+        axs[0, 1].set_title("Permutation Importance")
+        axs[0, 1].set_xlabel("Importance")
+
+        # 3–4) SHAP with modern API on current axes
+        exp = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+
+        plt.sca(axs[1, 0])
+        shap.plots.bar(exp, show=False, max_display=min(20, exp.values.shape[1]))
+        axs[1, 0].set_title("SHAP |mean|")
+
+        plt.sca(axs[1, 1])
+        shap.plots.beeswarm(exp, show=False, max_display=min(20, exp.values.shape[1]))
+        axs[1, 1].set_title("SHAP Beeswarm")
+
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        out = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_FI_Grid.png")
+        plt.savefig(out, dpi=300)
+        plt.show()
+    
+    def plot_shap_dependence(self, feature_name, interaction_feature=None):
+        exp = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+        # Modern API equivalent of dependence plot is scatter:
+        plt.figure(figsize=(8,6))
+        shap.plots.scatter(exp[:, feature_name], color=exp[:, interaction_feature] if interaction_feature else None, show=False)
+
+        plt.title(f"{self.config.analysis_name}: SHAP Dependence for {feature_name}")
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_dependence_{feature_name}.png"), dpi=300)
         plt.show()
 
     def run_and_generate_outputs(self):
         """A convenience method to run the full pipeline and save all plots."""
         self.run_analysis()
         
+        # if the model is a binary classifier, plot ROC curve
+        # in regressors, other evaluation metrics like RMSE are used
         if self.config.model_type == 'classifier':
             self.plot_roc_curve()
         
-        self._plot_importance(self.results['gini_importance'], 'Gini Feature Importance', f"{self.config.analysis_name}_gini_importance.png")
-        self._plot_importance(self.results['permutation_importance'], 'Permutation Feature Importance', f"{self.config.analysis_name}_perm_importance.png")
-        
-        self.plot_shap_summary()
+        # self.plot_shap_summary()
+        self.plot_feature_importance_grid()
         
         print(f"--- Analysis Complete: {self.config.analysis_name} ---")
         print(f"All outputs saved to: {self.config.output_dir}")
