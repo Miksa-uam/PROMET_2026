@@ -12,12 +12,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, roc_auc_score, roc_curve, mean_squared_error
 from sklearn.inspection import permutation_importance
 
-from rf_config import RFAnalysisConfig
+from paper12_config import paper2_rf_config
 
 class RandomForestAnalyzer:
     """A reusable engine for running RF feature importance analyses."""
 
-    def __init__(self, config: RFAnalysisConfig):
+    def __init__(self, config: paper2_rf_config):
         self.config = config
         self.model = None
         self.data = None
