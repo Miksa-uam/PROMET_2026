@@ -126,26 +126,38 @@ class RandomForestAnalyzer:
         self.results['gini_importance'] = pd.Series(self.model.feature_importances_, index=all_predictors)
         perm_imp = permutation_importance(self.model, self.X_test, self.y_test, n_repeats=10, random_state=42, n_jobs=-1)
         self.results['permutation_importance'] = pd.Series(perm_imp.importances_mean, index=all_predictors)
-        
-        # SHAP values () as Explanation)
+
+        # --- SHAP values (as Explanation) ---
+        print("Calculating SHAP values...")
+        shap_values = None
         try:
             if self.config.model_type == 'classifier':
-                # Interventional with background enables model_output='probability'
-                bg = self.X_train.sample(min(1000, len(self.X_train)), random_state=42)
+                # For classifiers, we use the "interventional" method to get probability-based SHAP values.
+                # This requires a background dataset, which we sample from the training data.
+                background_data = self.X_train.sample(n=min(100, len(self.X_train)), random_state=42)
+                
                 explainer = shap.TreeExplainer(
                     self.model,
-                    data=bg,
+                    data=background_data,
                     feature_perturbation="interventional",
                     model_output="probability"
                 )
-            else:
-                explainer = shap.TreeExplainer(self.model)  # raw for regressors
-            sv = explainer(self.X_test)  # shap.Explanation
-        except Exception:
-            # Fallback: tree_path_dependent + raw output (fast and stable)
+                shap_values = explainer(self.X_test)
+                
+            else: # For regressor models
+                # For regressors, the default explainer (raw output) is sufficient.
+                explainer = shap.TreeExplainer(self.model)
+                shap_values = explainer(self.X_test)
+
+        except Exception as e:
+            print(f"Warning: SHAP calculation failed. Falling back to basic explanation. Error: {e}")
+            # A safe fallback that works for both model types but may not give probability-scaled values
+            # for classifiers, potentially affecting plots.
             explainer = shap.TreeExplainer(self.model)
-            sv = explainer(self.X_test)
-        self.results['shap_explanation'] = sv  # unify on this key
+            shap_values = explainer(self.X_test)
+
+        self.results['shap_explanation'] = shap_values
+        print("All calculations complete.")
 
         print("All calculations complete.")
 
