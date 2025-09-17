@@ -1,1 +1,0 @@
-In this DB received the 10/03/2025, many of the body composition measurements are off due to a data cleaning error. A revised version of the DB was received the 28/03/2025, continue working with that one.

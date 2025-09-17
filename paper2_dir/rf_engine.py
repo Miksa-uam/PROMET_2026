@@ -4,6 +4,7 @@ import os
 import sqlite3
 import pandas as pd
 import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
 import shap
 from packaging import version
@@ -174,7 +175,7 @@ class RandomForestAnalyzer:
         ax.set_xlabel(title)
         ax.set_title(f"{self.config.analysis_name}: {title}")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.config.output_dir, file_name), dpi=300)
+        # plt.savefig(os.path.join(self.config.output_dir, file_name), dpi=300)
         plt.show()
 
     def plot_roc_curve(self):
@@ -195,7 +196,7 @@ class RandomForestAnalyzer:
         ax.set_title(f"{self.config.analysis_name}: ROC Curve")
         ax.legend()
         plt.tight_layout()
-        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_roc_curve.png"), dpi=300)
+        # plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_roc_curve.png"), dpi=300)
         plt.show()
 
     def _shap_explanation_for_positive_class(self, exp):
@@ -215,49 +216,103 @@ class RandomForestAnalyzer:
         shap.plots.beeswarm(exp, show=False)
         plt.title(f"{self.config.analysis_name}: SHAP Summary")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_summary.png"), dpi=300)
+        # plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_summary.png"), dpi=300)
         plt.show()
 
     def plot_feature_importance_grid(self):
+        """
+        Publication-ready 2x2 grid:
+        1) Gini, 2) Permutation, 3) SHAP |mean| bar, 4) SHAP beeswarm.
+        Non-uniform grid to give beeswarm more width and SHAP row more height.
+        """
         print("Generating 2x2 feature importance grid...")
         if version.parse(shap.__version__) < version.parse("0.41.0"):
             raise RuntimeError(f"SHAP {shap.__version__} detected. Upgrade to >= 0.41 for shap.plots.* API.")
+
+        # Canvas: rectangular, not square
         plt.style.use('seaborn-v0_8-whitegrid')
-        fig, axs = plt.subplots(2, 2, figsize=(20, 18))
-        fig.suptitle(f"Feature Importance Analysis: {self.config.analysis_name}", fontsize=20, fontweight='bold')
+        fig = plt.figure(figsize=(24, 16), layout="constrained")
 
-        # 1) Gini
-        gini_fi = self.results['gini_importance'].sort_values()
-        axs[0, 0].barh(range(len(gini_fi)), gini_fi.values)
-        axs[0, 0].set_yticks(range(len(gini_fi)))
-        axs[0, 0].set_yticklabels([self.config.nice_names.get(f, f) for f in gini_fi.index])
-        axs[0, 0].set_title("Gini Importance")
-        axs[0, 0].set_xlabel("Importance")
+        # Give the right column more width (for beeswarm + color bar)
+        # and the bottom row more height (for SHAP plots)
+        gs = fig.add_gridspec(
+            2, 2,
+            width_ratios=[1.0, 1.5],
+            height_ratios=[1.0, 1.2]
+        )
 
-        # 2) Permutation
-        perm_fi = self.results['permutation_importance'].sort_values()
-        axs[0, 1].barh(range(len(perm_fi)), perm_fi.values)
-        axs[0, 1].set_yticks(range(len(perm_fi)))
-        axs[0, 1].set_yticklabels([self.config.nice_names.get(f, f) for f in perm_fi.index])
-        axs[0, 1].set_title("Permutation Importance")
-        axs[0, 1].set_xlabel("Importance")
+        ax_gini      = fig.add_subplot(gs[0, 0])
+        ax_perm      = fig.add_subplot(gs[0, 1])
+        ax_shap_bar  = fig.add_subplot(gs[1, 0])
+        ax_beeswarm  = fig.add_subplot(gs[1, 1])
 
-        # 3–4) SHAP with modern API on current axes
+        # So constrained_layout leaves sensible gaps
+        fig.get_layout_engine().set(w_pad=0.03, h_pad=0.03, wspace=0.04, hspace=0.10)
+
+        # Title
+        fig.suptitle(f"Feature importances: {self.config.analysis_name}",
+                    fontsize=13, fontweight='bold')
+
+        # --- Canonical sort order from SHAP |mean| ---
         exp = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+        shap_feature_order = np.argsort(np.mean(np.abs(exp.values), axis=0))
+        feature_names_array = np.array(exp.feature_names)
+        ordered_feature_names = feature_names_array[shap_feature_order]
+        ordered_nice_names = [self.config.nice_names.get(f, f) for f in ordered_feature_names]
 
-        plt.sca(axs[1, 0])
-        shap.plots.bar(exp, show=False, max_display=min(20, exp.values.shape[1]))
-        axs[1, 0].set_title("SHAP |mean|")
+        # --- Top row: Gini and Permutation (sorted by SHAP order) ---
+        gini_fi = self.results['gini_importance'].reindex(ordered_feature_names)
+        ax_gini.barh(range(len(gini_fi)), gini_fi.values, color="#4C78A8")
+        ax_gini.set_yticks(range(len(gini_fi)))
+        ax_gini.set_yticklabels(ordered_nice_names, fontsize=10)
+        ax_gini.set_title("Gini Importance", fontsize=12)
+        ax_gini.set_xlabel("Mean Decrease in Impurity", fontsize=10)
 
-        plt.sca(axs[1, 1])
-        shap.plots.beeswarm(exp, show=False, max_display=min(20, exp.values.shape[1]))
-        axs[1, 1].set_title("SHAP Beeswarm")
+        perm_fi = self.results['permutation_importance'].reindex(ordered_feature_names)
+        ax_perm.barh(range(len(perm_fi)), perm_fi.values, color="#4C78A8")
+        ax_perm.set_yticks(range(len(perm_fi)))
+        ax_perm.set_yticklabels(ordered_nice_names, fontsize=10)
+        ax_perm.set_title("Permutation Importance", fontsize=12)
+        ax_perm.set_xlabel("Mean Decrease in Model Score", fontsize=10)
 
-        plt.tight_layout(rect=[0, 0, 1, 0.96])
-        out = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_FI_Grid.png")
-        plt.savefig(out, dpi=300)
+        # --- Bottom row: SHAP plots, with nice names and unified order ---
+        exp_for_plotting = shap.Explanation(
+            values=exp.values,
+            base_values=exp.base_values,
+            data=exp.data,
+            feature_names=[self.config.nice_names.get(f, f) for f in exp.feature_names]
+        )
+
+        # SHAP |mean| bar (limit bars so labels stay readable)
+        plt.sca(ax_shap_bar)
+        shap.plots.bar(
+            exp_for_plotting[:, shap_feature_order],
+            max_display=min(12, exp.values.shape[1]),
+            show=False
+        )
+        ax_shap_bar.set_title("SHAP Mean Absolute Value", fontsize=12)
+        ax_shap_bar.tick_params(axis='y', labelsize=10)
+        ax_shap_bar.tick_params(axis='x', labelsize=10)
+        ax_shap_bar.set_xlabel(ax_shap_bar.get_xlabel(), fontsize=10)
+
+        # SHAP beeswarm (slightly smaller markers; keep color bar; wider cell handles it)
+        plt.sca(ax_beeswarm)
+        shap.plots.beeswarm(
+            exp_for_plotting[:, shap_feature_order],
+            max_display=min(12, exp.values.shape[1]),
+            s=12,
+            color_bar=True,
+            show=False
+        )
+        ax_beeswarm.set_title("SHAP Value Distribution (Beeswarm)", fontsize=10)
+        ax_beeswarm.tick_params(axis='y', labelsize=10)
+        ax_beeswarm.tick_params(axis='x', labelsize=10)
+        ax_beeswarm.set_xlabel(ax_beeswarm.get_xlabel(), fontsize=10)
+
+        out_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_FI_Grid.png")
+        # plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.show()
-    
+
     def plot_shap_dependence(self, feature_name, interaction_feature=None):
         exp = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
         # Modern API equivalent of dependence plot is scatter:
@@ -266,7 +321,7 @@ class RandomForestAnalyzer:
 
         plt.title(f"{self.config.analysis_name}: SHAP Dependence for {feature_name}")
         plt.tight_layout()
-        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_dependence_{feature_name}.png"), dpi=300)
+        # plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_dependence_{feature_name}.png"), dpi=300)
         plt.show()
 
     def run_and_generate_outputs(self):
@@ -278,7 +333,7 @@ class RandomForestAnalyzer:
         if self.config.model_type == 'classifier':
             self.plot_roc_curve()
         
-        # self.plot_shap_summary()
+        self.plot_shap_summary()
         self.plot_feature_importance_grid()
         
         print(f"--- Analysis Complete: {self.config.analysis_name} ---")
