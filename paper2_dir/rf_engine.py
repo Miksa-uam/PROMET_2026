@@ -175,7 +175,7 @@ class RandomForestAnalyzer:
         ax.set_xlabel(title)
         ax.set_title(f"{self.config.analysis_name}: {title}")
         plt.tight_layout()
-        # plt.savefig(os.path.join(self.config.output_dir, file_name), dpi=300)
+        plt.savefig(os.path.join(self.config.output_dir, file_name), dpi=300)
         plt.show()
 
     def plot_roc_curve(self):
@@ -196,7 +196,7 @@ class RandomForestAnalyzer:
         ax.set_title(f"{self.config.analysis_name}: ROC Curve")
         ax.legend()
         plt.tight_layout()
-        # plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_roc_curve.png"), dpi=300)
+        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_roc_curve.png"), dpi=300)
         plt.show()
 
     def _shap_explanation_for_positive_class(self, exp):
@@ -216,7 +216,7 @@ class RandomForestAnalyzer:
         shap.plots.beeswarm(exp, show=False)
         plt.title(f"{self.config.analysis_name}: SHAP Summary")
         plt.tight_layout()
-        # plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_summary.png"), dpi=300)
+        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_summary.png"), dpi=300)
         plt.show()
 
     def plot_feature_importance_grid(self):
@@ -310,7 +310,7 @@ class RandomForestAnalyzer:
         ax_beeswarm.set_xlabel(ax_beeswarm.get_xlabel(), fontsize=10)
 
         out_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_FI_Grid.png")
-        # plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.show()
 
     def plot_shap_dependence(self, feature_name, interaction_feature=None):
@@ -321,7 +321,7 @@ class RandomForestAnalyzer:
 
         plt.title(f"{self.config.analysis_name}: SHAP Dependence for {feature_name}")
         plt.tight_layout()
-        # plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_dependence_{feature_name}.png"), dpi=300)
+        plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_dependence_{feature_name}.png"), dpi=300)
         plt.show()
 
     def run_and_generate_outputs(self):
