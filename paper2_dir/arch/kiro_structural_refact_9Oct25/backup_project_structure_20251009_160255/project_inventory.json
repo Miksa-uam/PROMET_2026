@@ -1,0 +1,186 @@
+{
+  "timestamp": "2025-10-09T16:02:55.770259",
+  "total_files": 20,
+  "total_directories": 6,
+  "categorized_files": {
+    "script": {
+      "count": 12,
+      "files": [
+        "create_project_structure.py",
+        "descriptive_comparisons.py",
+        "file_movement_utils.py",
+        "paper12_config.py",
+        "paper12_dataprep.py",
+        "paper2_notebook.ipynb",
+        "paper2_notebook_kiro_refact.ipynb",
+        "regressions_inference.py",
+        "rf_config.py",
+        "rf_engine.py",
+        "stats_helpers.py",
+        "timetoevent_table_functions.py"
+      ]
+    },
+    "database": {
+      "count": 6,
+      "files": [
+        "pnk_db2_p2_cluster_hclust_ward.sqlite",
+        "pnk_db2_p2_cluster_pam_default.sqlite",
+        "pnk_db2_p2_cluster_pam_goldstd",
+        "pnk_db2_p2_cluster_pam_goldstd.sqlite",
+        "pnk_db2_p2_in.sqlite",
+        "pnk_db2_p2_out.sqlite"
+      ]
+    },
+    "output": {
+      "count": 2,
+      "files": [
+        "wgc_cmpl_datacollection_bias.png",
+        "wgc_gen_cmpl_datacollection_bias.png"
+      ]
+    },
+    "unknown": {
+      "count": 0,
+      "files": []
+    }
+  },
+  "output_directories": [
+    "arch",
+    "clustering_metadata",
+    "explorative_analyses_Aug25",
+    "pam_clust",
+    "rf_outputs",
+    "wgc_association_networks"
+  ],
+  "complete_file_mapping": {
+    "create_project_structure.py": {
+      "type": "script",
+      "destination": "scripts\\create_project_structure.py",
+      "is_directory": false
+    },
+    "descriptive_comparisons.py": {
+      "type": "script",
+      "destination": "scripts\\descriptive_comparisons.py",
+      "is_directory": false
+    },
+    "file_movement_utils.py": {
+      "type": "script",
+      "destination": "scripts\\file_movement_utils.py",
+      "is_directory": false
+    },
+    "paper12_config.py": {
+      "type": "script",
+      "destination": "scripts\\paper12_config.py",
+      "is_directory": false
+    },
+    "paper12_dataprep.py": {
+      "type": "script",
+      "destination": "scripts\\paper12_dataprep.py",
+      "is_directory": false
+    },
+    "paper2_notebook.ipynb": {
+      "type": "script",
+      "destination": "scripts\\paper2_notebook.ipynb",
+      "is_directory": false
+    },
+    "paper2_notebook_kiro_refact.ipynb": {
+      "type": "script",
+      "destination": "scripts\\paper2_notebook_kiro_refact.ipynb",
+      "is_directory": false
+    },
+    "regressions_inference.py": {
+      "type": "script",
+      "destination": "scripts\\regressions_inference.py",
+      "is_directory": false
+    },
+    "rf_config.py": {
+      "type": "script",
+      "destination": "scripts\\rf_config.py",
+      "is_directory": false
+    },
+    "rf_engine.py": {
+      "type": "script",
+      "destination": "scripts\\rf_engine.py",
+      "is_directory": false
+    },
+    "stats_helpers.py": {
+      "type": "script",
+      "destination": "scripts\\stats_helpers.py",
+      "is_directory": false
+    },
+    "timetoevent_table_functions.py": {
+      "type": "script",
+      "destination": "scripts\\timetoevent_table_functions.py",
+      "is_directory": false
+    },
+    "pnk_db2_p2_cluster_hclust_ward.sqlite": {
+      "type": "database",
+      "destination": "dbs\\pnk_db2_p2_cluster_hclust_ward.sqlite",
+      "is_directory": false
+    },
+    "pnk_db2_p2_cluster_pam_default.sqlite": {
+      "type": "database",
+      "destination": "dbs\\pnk_db2_p2_cluster_pam_default.sqlite",
+      "is_directory": false
+    },
+    "pnk_db2_p2_cluster_pam_goldstd": {
+      "type": "database",
+      "destination": "dbs\\pnk_db2_p2_cluster_pam_goldstd",
+      "is_directory": false
+    },
+    "pnk_db2_p2_cluster_pam_goldstd.sqlite": {
+      "type": "database",
+      "destination": "dbs\\pnk_db2_p2_cluster_pam_goldstd.sqlite",
+      "is_directory": false
+    },
+    "pnk_db2_p2_in.sqlite": {
+      "type": "database",
+      "destination": "dbs\\pnk_db2_p2_in.sqlite",
+      "is_directory": false
+    },
+    "pnk_db2_p2_out.sqlite": {
+      "type": "database",
+      "destination": "dbs\\pnk_db2_p2_out.sqlite",
+      "is_directory": false
+    },
+    "wgc_cmpl_datacollection_bias.png": {
+      "type": "output",
+      "destination": "outputs\\wgc_cmpl_datacollection_bias.png",
+      "is_directory": false
+    },
+    "wgc_gen_cmpl_datacollection_bias.png": {
+      "type": "output",
+      "destination": "outputs\\wgc_gen_cmpl_datacollection_bias.png",
+      "is_directory": false
+    },
+    "arch": {
+      "type": "output",
+      "destination": "outputs\\arch",
+      "is_directory": true
+    },
+    "clustering_metadata": {
+      "type": "output",
+      "destination": "outputs\\clustering_metadata",
+      "is_directory": true
+    },
+    "explorative_analyses_Aug25": {
+      "type": "output",
+      "destination": "outputs\\explorative_analyses_Aug25",
+      "is_directory": true
+    },
+    "pam_clust": {
+      "type": "output",
+      "destination": "outputs\\pam_clust",
+      "is_directory": true
+    },
+    "rf_outputs": {
+      "type": "output",
+      "destination": "outputs\\rf_outputs",
+      "is_directory": true
+    },
+    "wgc_association_networks": {
+      "type": "output",
+      "destination": "outputs\\wgc_association_networks",
+      "is_directory": true
+    }
+  }
+}
