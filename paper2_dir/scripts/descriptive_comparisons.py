@@ -4,8 +4,13 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import logging
 from scipy.stats import ttest_ind, chi2_contingency
 from paper12_config import descriptive_comparisons_config, master_config
+from fdr_correction_utils import collect_pvalues_from_dataframe, apply_fdr_correction, integrate_corrected_pvalues
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 # =========================
@@ -192,7 +197,17 @@ def perform_comparison(g0, g1, var, vtype):
 def plot_datacollection_bias(df_cohort, df_mother, cohort_name, mother_cohort_name, output_file):
     """
     Generates and saves a bar plot comparing the distribution of medical record start years.
+    Ensures plots are saved to the outputs directory, not the scripts directory.
     """
+    import os
+    
+    # Ensure the output file is in the outputs directory
+    if not os.path.isabs(output_file):
+        # If it's a relative path, make sure it goes to outputs folder
+        outputs_dir = "../outputs"
+        os.makedirs(outputs_dir, exist_ok=True)
+        output_file = os.path.join(outputs_dir, os.path.basename(output_file))
+    
     df_cohort['year'] = pd.to_datetime(df_cohort['baseline_date']).dt.year
     df_mother['year'] = pd.to_datetime(df_mother['baseline_date']).dt.year
 
@@ -291,6 +306,62 @@ def demographic_stratification(df, df_mother, config: descriptive_comparisons_co
 
     summary_rows = add_empty_rows_and_pretty_names(summary_rows, row_order)
     summary_df = pd.DataFrame(summary_rows)
+    
+    # Apply FDR correction if enabled
+    if config.fdr_correction:
+        try:
+            print("Applying FDR correction to demographic stratification p-values...")
+            logger.info("Starting FDR correction for demographic stratification")
+            
+            # Define p-value columns for demographic stratification
+            pvalue_columns = [
+                "Cohort comparison: p-value",
+                "Age: p-value", 
+                "Gender: p-value",
+                "BMI: p-value"
+            ]
+            
+            # Collect p-values from the summary DataFrame
+            pvalue_dict = collect_pvalues_from_dataframe(summary_df, pvalue_columns)
+            
+            # Check if we have sufficient valid p-values for correction
+            total_pvals = 0
+            valid_pvals = 0
+            for col, pvals in pvalue_dict.items():
+                total_pvals += len(pvals)
+                valid_pvals += sum(1 for p in pvals if pd.notna(p) and isinstance(p, (int, float)))
+            
+            if valid_pvals == 0:
+                logger.warning("FDR correction skipped for demographic stratification: no valid p-values found")
+                print("Warning: FDR correction skipped - no valid p-values found in demographic comparisons")
+            elif valid_pvals < 2:
+                logger.warning(f"FDR correction applied with limited data: only {valid_pvals} valid p-value(s) found")
+                print(f"Warning: FDR correction applied with only {valid_pvals} valid p-value(s)")
+            else:
+                logger.info(f"FDR correction proceeding with {valid_pvals} valid p-values out of {total_pvals} total")
+            
+            # Apply FDR correction to collected p-values
+            corrections = {}
+            successful_corrections = 0
+            for col, pvals in pvalue_dict.items():
+                try:
+                    corrected_pvals = apply_fdr_correction(pvals)
+                    corrections[col] = corrected_pvals
+                    successful_corrections += 1
+                except Exception as e:
+                    logger.error(f"FDR correction failed for column '{col}': {str(e)}. Using original p-values.")
+                    corrections[col] = pvals  # Fallback to original p-values
+            
+            # Integrate corrected p-values back into the DataFrame
+            summary_df = integrate_corrected_pvalues(summary_df, corrections, " (FDR-corrected)")
+            
+            logger.info(f"FDR correction completed for demographic stratification: {successful_corrections}/{len(pvalue_columns)} columns corrected successfully")
+            print(f"FDR correction applied to {successful_corrections} demographic p-value columns")
+            
+        except Exception as e:
+            logger.error(f"FDR correction failed for demographic stratification: {str(e)}. Continuing with original p-values.")
+            print(f"Error: FDR correction failed for demographic stratification. Continuing with original p-values.")
+    
     summary_df.to_sql(config.demographic_output_table, conn, if_exists="replace", index=False)
     print(f"Demographic stratification table saved to {config.demographic_output_table}")
 
@@ -336,6 +407,65 @@ def wgc_stratification(df, config: descriptive_comparisons_config, conn):
 
     summary_rows = add_empty_rows_and_pretty_names(summary_rows, row_order)
     summary_df = pd.DataFrame(summary_rows)
+    
+    # Apply FDR correction if enabled
+    if config.fdr_correction:
+        try:
+            print("Applying FDR correction to weight gain cause stratification p-values...")
+            logger.info("Starting FDR correction for weight gain cause stratification")
+            
+            # Collect p-value column names dynamically based on weight gain causes
+            pvalue_columns = []
+            for _, _, label in strata_pairs:
+                pvalue_columns.append(f"{label}: p-value")
+            
+            if not pvalue_columns:
+                logger.warning("FDR correction skipped for weight gain cause stratification: no weight gain cause columns found")
+                print("Warning: FDR correction skipped - no weight gain cause comparisons found")
+            else:
+                logger.info(f"Found {len(pvalue_columns)} weight gain cause comparison columns for FDR correction")
+                
+                # Collect p-values from the summary DataFrame
+                pvalue_dict = collect_pvalues_from_dataframe(summary_df, pvalue_columns)
+                
+                # Check if we have sufficient valid p-values for correction
+                total_pvals = 0
+                valid_pvals = 0
+                for col, pvals in pvalue_dict.items():
+                    total_pvals += len(pvals)
+                    valid_pvals += sum(1 for p in pvals if pd.notna(p) and isinstance(p, (int, float)))
+                
+                if valid_pvals == 0:
+                    logger.warning("FDR correction skipped for weight gain cause stratification: no valid p-values found")
+                    print("Warning: FDR correction skipped - no valid p-values found in weight gain cause comparisons")
+                elif valid_pvals < 2:
+                    logger.warning(f"FDR correction applied with limited data: only {valid_pvals} valid p-value(s) found")
+                    print(f"Warning: FDR correction applied with only {valid_pvals} valid p-value(s)")
+                else:
+                    logger.info(f"FDR correction proceeding with {valid_pvals} valid p-values out of {total_pvals} total")
+                
+                # Apply FDR correction to collected p-values
+                corrections = {}
+                successful_corrections = 0
+                for col, pvals in pvalue_dict.items():
+                    try:
+                        corrected_pvals = apply_fdr_correction(pvals)
+                        corrections[col] = corrected_pvals
+                        successful_corrections += 1
+                    except Exception as e:
+                        logger.error(f"FDR correction failed for column '{col}': {str(e)}. Using original p-values.")
+                        corrections[col] = pvals  # Fallback to original p-values
+                
+                # Integrate corrected p-values back into the DataFrame
+                summary_df = integrate_corrected_pvalues(summary_df, corrections, " (FDR-corrected)")
+                
+                logger.info(f"FDR correction completed for weight gain cause stratification: {successful_corrections}/{len(pvalue_columns)} columns corrected successfully")
+                print(f"FDR correction applied to {successful_corrections} weight gain cause p-value columns")
+            
+        except Exception as e:
+            logger.error(f"FDR correction failed for weight gain cause stratification: {str(e)}. Continuing with original p-values.")
+            print(f"Error: FDR correction failed for weight gain cause stratification. Continuing with original p-values.")
+    
     summary_df.to_sql(config.wgc_output_table, conn, if_exists="replace", index=False)
     print(f"Weight gain cause stratification table saved to {config.wgc_output_table}")
 
@@ -345,37 +475,85 @@ def wgc_stratification(df, config: descriptive_comparisons_config, conn):
 
 def run_descriptive_comparisons(master_config: master_config):
     """Main execution pipeline for all defined descriptive analyses."""
-    input_db_path = master_config.paths.paper_in_db
-    output_db_path = master_config.paths.paper_out_db
+    try:
+        # Validate master configuration
+        if not master_config.paths:
+            raise ValueError("Master config missing paths configuration")
+        if not master_config.descriptive_comparisons:
+            raise ValueError("Master config missing descriptive_comparisons configuration")
+        
+        input_db_path = master_config.paths.paper_in_db
+        output_db_path = master_config.paths.paper_out_db
+        
+        logger.info(f"Starting descriptive comparisons pipeline with {len(master_config.descriptive_comparisons)} analysis configurations")
 
-    for analysis_config in master_config.descriptive_comparisons:
-        print(f"\nExecuting analysis: '{analysis_config.analysis_name}'")
-        with sqlite3.connect(input_db_path) as conn_in:
-            df_input = pd.read_sql_query(f"SELECT * FROM {analysis_config.input_cohort_name}", conn_in)
-            df_mother = pd.read_sql_query(f"SELECT * FROM {analysis_config.mother_cohort_name}", conn_in)
+        for i, analysis_config in enumerate(master_config.descriptive_comparisons, 1):
+            try:
+                print(f"\nExecuting analysis {i}/{len(master_config.descriptive_comparisons)}: '{analysis_config.analysis_name}'")
+                logger.info(f"Starting analysis: {analysis_config.analysis_name}")
+                
+                # Validate and log FDR correction configuration
+                fdr_enabled = getattr(analysis_config, 'fdr_correction', False)
+                if fdr_enabled:
+                    print(f"  FDR correction: ENABLED (Benjamini-Hochberg method)")
+                    logger.info(f"FDR correction enabled for analysis: {analysis_config.analysis_name}")
+                else:
+                    print(f"  FDR correction: DISABLED (raw p-values only)")
+                    logger.info(f"FDR correction disabled for analysis: {analysis_config.analysis_name}")
+                
+                # Validate required configuration parameters
+                required_params = ['input_cohort_name', 'mother_cohort_name', 'demographic_output_table', 'wgc_output_table']
+                for param in required_params:
+                    if not hasattr(analysis_config, param) or not getattr(analysis_config, param):
+                        raise ValueError(f"Analysis config '{analysis_config.analysis_name}' missing required parameter: {param}")
+                
+                # Load data
+                with sqlite3.connect(input_db_path) as conn_in:
+                    df_input = pd.read_sql_query(f"SELECT * FROM {analysis_config.input_cohort_name}", conn_in)
+                    df_mother = pd.read_sql_query(f"SELECT * FROM {analysis_config.mother_cohort_name}", conn_in)
+                
+                logger.info(f"Loaded data: {len(df_input)} input cohort records, {len(df_mother)} mother cohort records")
 
-        # Generate bias plot if configured
-        if analysis_config.bias_plot_filename:
-            plot_datacollection_bias(
-                df_input.copy(), df_mother.copy(),
-                analysis_config.input_cohort_name, analysis_config.mother_cohort_name,
-                analysis_config.bias_plot_filename
-            )
-        else:
-            print("Warning: 'baseline_date' column not found. Skipping bias plot generation.")
+                # Generate bias plot if configured
+                if analysis_config.bias_plot_filename:
+                    plot_datacollection_bias(
+                        df_input.copy(), df_mother.copy(),
+                        analysis_config.input_cohort_name, analysis_config.mother_cohort_name,
+                        analysis_config.bias_plot_filename
+                    )
+                else:
+                    print("Warning: 'baseline_date' column not found. Skipping bias plot generation.")
 
-        # Run stratifications
-        with sqlite3.connect(output_db_path) as conn_out:
-            demographic_stratification(
-                df_input, df_mother, 
-                analysis_config,
-                conn_out
-            )
-            wgc_stratification(
-                df_input,
-                analysis_config,
-                conn_out
-            )
-    
-    print("\n--- All Descriptive Analyses Complete ---")
+                # Run stratifications with FDR correction configuration properly propagated
+                with sqlite3.connect(output_db_path) as conn_out:
+                    # Ensure FDR correction parameter is properly propagated
+                    logger.info(f"Running demographic stratification with FDR correction: {fdr_enabled}")
+                    demographic_stratification(
+                        df_input, df_mother, 
+                        analysis_config,  # This contains the fdr_correction parameter
+                        conn_out
+                    )
+                    
+                    logger.info(f"Running weight gain cause stratification with FDR correction: {fdr_enabled}")
+                    wgc_stratification(
+                        df_input,
+                        analysis_config,  # This contains the fdr_correction parameter
+                        conn_out
+                    )
+                
+                logger.info(f"Completed analysis: {analysis_config.analysis_name}")
+                print(f"  Analysis '{analysis_config.analysis_name}' completed successfully")
+                
+            except Exception as e:
+                logger.error(f"Analysis '{analysis_config.analysis_name}' failed: {str(e)}")
+                print(f"  Error: Analysis '{analysis_config.analysis_name}' failed: {str(e)}")
+                raise  # Re-raise to stop pipeline on individual analysis failure
+        
+        logger.info("All descriptive analyses completed successfully")
+        print("\n--- All Descriptive Analyses Complete ---")
+        
+    except Exception as e:
+        logger.error(f"Descriptive comparisons pipeline failed: {str(e)}")
+        print(f"\nError: Descriptive comparisons pipeline failed: {str(e)}")
+        raise
 

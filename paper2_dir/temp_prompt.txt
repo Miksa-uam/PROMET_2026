@@ -1,0 +1,18 @@
+I want to get the most out of Kiro, as the specification-driven development is a cool idea that could bring a lot of opportunity to my workflow. 
+
+However I need to trust this system and understand its limitations to be able to adapt it. 
+
+The experience with the FDR implementation is lukewarm. 
+The workflow seemed smooth, specifications were relevant, but the implementation was crazy. 
+How is it that the most important specs were not implemented? 
+- there was no fdr correction option in the notebook
+- when manually adding it, it was not recognized
+- and when finally making that fix, the fdr corrected p value column did not appear in the output
+
+We did a lot of refactoring, we changed the whole directory structure. 
+With all of that, Kiro seemed pretty intelligent and useful. 
+But these errors are still serious. 
+
+Without changing any code or anything, can you just do a bit of reflection on this project, tell me what went wrong, what are the limitations of Kiro in this context, and how can I make sure to bring the most out of this promising tool? 
+
+

@@ -42,7 +42,23 @@ class timetoevent_subsetting_config:
 
 @dataclass
 class descriptive_comparisons_config:
-    """A streamlined config for a single descriptive comparison analysis."""
+    """A streamlined config for a single descriptive comparison analysis.
+    
+    Parameters:
+        analysis_name: Name identifier for the analysis
+        input_cohort_name: Name of the input cohort being analyzed
+        mother_cohort_name: Name of the reference/mother cohort for comparison
+        row_order: List of tuples containing (variable_name, pretty_name) for table row ordering
+        demographic_output_table: Output table name for demographic stratification results
+        demographic_strata: List of demographic variables to stratify by
+        wgc_output_table: Output table name for weight gain cause stratification results
+        wgc_strata: List of weight gain causes to stratify by (can be empty if not needed)
+        bias_plot_filename: Optional filename for bias plot output
+        fdr_correction: Whether to apply False Discovery Rate correction using Benjamini-Hochberg method.
+                       When True, adds FDR-corrected p-value columns with "(FDR-corrected)" suffix.
+                       When False (default), behaves as original implementation with raw p-values only.
+                       Maintains backward compatibility with existing analysis configurations.
+    """
     analysis_name: str
     input_cohort_name: str
     mother_cohort_name: str
@@ -60,6 +76,9 @@ class descriptive_comparisons_config:
 
     # Optional plot filename
     bias_plot_filename: Optional[str] = None
+    
+    # FDR correction setting
+    fdr_correction: bool = False
 
 @dataclass
 class paper2_rf_config:
@@ -125,6 +144,6 @@ class master_config:
     filtering: Optional[filtering_config] = None
     timetoevent: Optional[timetoevent_config] = None
     timetoevent_subsetting: Optional[timetoevent_subsetting_config] = None
-    descriptive_comparisons: Optional[descriptive_comparisons_config] = None
+    descriptive_comparisons: Optional[List[descriptive_comparisons_config]] = None
     paper2_rf: Optional[paper2_rf_config] = None
 
