@@ -16,3 +16,71 @@ But these errors are still serious.
 Without changing any code or anything, can you just do a bit of reflection on this project, tell me what went wrong, what are the limitations of Kiro in this context, and how can I make sure to bring the most out of this promising tool? 
 
 
+
+
+RF 
+
+(- gini significance cutoff with shadow features)
+(- shap significance test with t test against zero)
+- showing all features at all times, in order of importance on each figure, ie magnitude of effect
+- altering the output panels to make 2 bi-panel figs
+-   1 for publication: Gini left, SHAP beeswarm right
+-   1 for the bin: SHAP mean abs left, Permutation FI right
+
+
+
+
+
+
+### Task 1: Significance Testing Gini Feature Importance
+
+This task is using the robust "shadow feature" permutation method. It will provide a data-driven cutoff for the Gini importance plot
+
+**Objective**: To determine which features have a Gini importance score that is statistically greater than random chance.
+
+*   **Step 1: Create Shadow Features**
+    1.  Take your final training dataset (let's call it `X_train`), which contains all your original predictors (WGCs, age, sex, BMI).
+    2.  Create a complete copy of `X_train` and name it `X_shadow`.
+    3.  In `X_shadow`, iterate through each column (feature) and randomly shuffle its values. This breaks the link between the feature and the outcome but preserves its distribution.
+    4.  Rename the columns in `X_shadow` to avoid confusion (e.g., `Age` becomes `Age_shadow`).
+
+*   **Step 2: Augment Data and Train Model**
+    1.  Combine the original `X_train` and the new `X_shadow` into a single, wide dataset. This new dataset will have twice the number of features.
+    2.  Train your Random Forest classifier on this augmented dataset, using the same target variable (10% weight loss) and model settings as before.
+
+*   **Step 3: Establish Significance Threshold**
+    1.  After training, calculate the Gini importance for *all* features (both original and shadow).
+    2.  Isolate the importance scores of only the shadow features.
+    3.  Find the **maximum importance score** from this group of shadow features. This value is your significance cutoff. It represents the highest level of importance achieved by pure noise in your model.
+
+*   **Step 4: Identify Significant Features & Visualize**
+    1.  Compare the Gini importance score of each of your *original* features against the cutoff.
+    2.  **Any original feature with a Gini score greater than the cutoff is considered statistically significant.**
+    3.  To visualize, recreate your Gini importance bar plot and add a vertical dashed line at the cutoff value. This makes it immediately clear which features' importances are meaningful.
+
+***
+
+### Task 2: Significance Testing SHAP Value Distributions
+
+This is the more modern and often more powerful method. It directly tests the significance of the feature effects shown in your SHAP beeswarm plot (bottom right of your figure).
+
+**Objective**: To determine if the average effect of each feature on the model's prediction is statistically different from zero.
+
+*   **Step 1: Calculate SHAP Values**
+    1.  Train your Random Forest classifier on your **original** training data (no shadow features are needed here).
+    2.  Using the `shap` library, create an explainer (e.g., `shap.TreeExplainer`) for your trained model.
+    3.  Calculate the SHAP values for all features across all instances in your test set. This will give you a matrix of SHAP values where each row is a patient and each column is a feature.
+
+*   **Step 2: Perform a Non-Parametric Significance Test**
+    1.  As you correctly noted, these distributions are often not normal. Therefore, for each feature, you will perform a **one-sample Wilcoxon signed-rank test**.
+    2.  The null hypothesis for this test is that the median of the distribution of SHAP values for that feature is equal to zero.
+    3.  Loop through each feature's column of SHAP values and run this test. Store the resulting p-value for each feature.
+
+*   **Step 3: Correct for Multiple Comparisons**
+    1.  This step is critical for statistical rigor. Because you are running a separate test for each feature, you must adjust the p-values to control the false discovery rate.
+    2.  Apply the **Benjamini-Hochberg (FDR) correction** to the list of p-values you collected in the previous step. This will give you a set of "adjusted p-values."
+
+*   **Step 4: Identify Significant Features & Visualize**
+    1.  Compare your adjusted p-values to your significance level (e.g., α = 0.05).
+    2.  **Any feature with an adjusted p-value less than your alpha is considered to have a statistically significant impact on the model's output.**
+    3.  To visualize, annotate the feature names on your SHAP summary bar plot (like the one in the bottom left of your figure) with asterisks based on their adjusted p-values (e.g., `*` for p<0.05, `**` for p<0.01).

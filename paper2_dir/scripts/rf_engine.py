@@ -16,6 +16,8 @@ from sklearn.metrics import f1_score, roc_auc_score, roc_curve, mean_squared_err
 from sklearn.inspection import permutation_importance
 
 from paper12_config import paper2_rf_config
+from significance_testing import FeatureImportanceSignificanceTester, SignificanceResults
+from enhanced_visualization import EnhancedFeatureImportancePlotter
 
 
 class RandomForestAnalyzer:
@@ -27,8 +29,14 @@ class RandomForestAnalyzer:
         self.data = None
         self.X_train, self.X_test, self.y_train, self.y_test = None, None, None, None
         self.results = {}
+        
+        # Initialize significance tester and enhanced plotter
+        self.significance_tester = FeatureImportanceSignificanceTester(config, random_state=42)
+        self.enhanced_plotter = EnhancedFeatureImportancePlotter(config, config.nice_names)
+        
         os.makedirs(self.config.output_dir, exist_ok=True)
         print(f"--- Initialized Analysis: {self.config.analysis_name} ---")
+        print(f"--- Significance testing enabled: Gini={config.enable_gini_significance}, SHAP={config.enable_shap_significance} ---")
 
     def _load_and_prepare_data(self):
         """Loads data and prepares the outcome variable."""
@@ -160,7 +168,60 @@ class RandomForestAnalyzer:
         self.results['shap_explanation'] = shap_values
         print("All calculations complete.")
 
-        print("All calculations complete.")
+    def _test_feature_significance(self):
+        """
+        Orchestrate significance testing for both Gini and SHAP importance.
+        
+        This method runs comprehensive significance testing and stores results
+        in the results dictionary for use by visualization methods.
+        """
+        try:
+            print("Starting feature importance significance testing...")
+            
+            # Get required data for significance testing
+            all_predictors = self.config.predictors + self.config.covariates
+            shap_explanation = self.results['shap_explanation']
+            
+            # Extract SHAP values for positive class if classifier
+            exp = self._shap_explanation_for_positive_class(shap_explanation)
+            
+            # Run comprehensive significance testing
+            significance_results = self.significance_tester.run_all_tests(
+                self.X_train, 
+                self.y_train, 
+                exp.values, 
+                exp.feature_names
+            )
+            
+            # Store results
+            self.results['significance_results'] = significance_results
+            self.results['feature_ordering'] = all_predictors  # Store canonical ordering
+            
+            print(f"Significance testing complete:")
+            print(f"  - Gini significant features: {len(significance_results.gini_significant_features)}")
+            print(f"  - SHAP significant features: {len(significance_results.shap_significant_features)}")
+            print(f"  - Significance threshold: {significance_results.gini_threshold:.6f}")
+            
+            return significance_results
+            
+        except Exception as e:
+            print(f"Warning: Significance testing failed: {str(e)}")
+            # Create minimal results to allow analysis to continue
+            all_predictors = self.config.predictors + self.config.covariates
+            minimal_results = SignificanceResults(
+                gini_threshold=0.0,
+                gini_significant_features=[],
+                shadow_importances={},
+                shap_pvalues={},
+                shap_adjusted_pvalues={},
+                shap_significant_features=[],
+                alpha_level=self.config.significance_alpha,
+                n_features_tested=len(all_predictors),
+                n_shadow_features=0
+            )
+            self.results['significance_results'] = minimal_results
+            self.results['feature_ordering'] = all_predictors
+            return minimal_results
 
     def _plot_importance(self, importance_series, title, file_name):
         """Generic plotting function for Gini and Permutation importance."""
@@ -324,18 +385,101 @@ class RandomForestAnalyzer:
         plt.savefig(os.path.join(self.config.output_dir, f"{self.config.analysis_name}_shap_dependence_{feature_name}.png"), dpi=300)
         plt.show()
 
+    def _plot_primary_composite(self):
+        """Create primary composite plot using enhanced visualization."""
+        try:
+            print("Generating primary composite plot (Gini + SHAP beeswarm)...")
+            
+            # Get required data
+            gini_importance = self.results['gini_importance']
+            shap_explanation = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+            significance_results = self.results.get('significance_results')
+            
+            # Generate output path
+            output_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_primary_FI_composite.png")
+            
+            # Create plot
+            self.enhanced_plotter.plot_primary_composite(
+                gini_importance, 
+                shap_explanation, 
+                significance_results, 
+                output_path
+            )
+            
+            print(f"Primary composite plot saved to: {output_path}")
+            
+        except Exception as e:
+            print(f"Warning: Primary composite plot generation failed: {str(e)}")
+            # Fall back to individual plots if composite fails
+            self._plot_importance(self.results['gini_importance'], "Gini Importance", f"{self.config.analysis_name}_gini_importance.png")
+
+    def _plot_secondary_composite(self):
+        """Create secondary composite plot using enhanced visualization."""
+        try:
+            print("Generating secondary composite plot (Mean SHAP + Permutation)...")
+            
+            # Get required data
+            shap_explanation = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+            permutation_importance = self.results['permutation_importance']
+            
+            # Generate output path
+            output_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_secondary_FI_composite.png")
+            
+            # Create plot
+            self.enhanced_plotter.plot_secondary_composite(
+                shap_explanation, 
+                permutation_importance, 
+                output_path
+            )
+            
+            print(f"Secondary composite plot saved to: {output_path}")
+            
+        except Exception as e:
+            print(f"Warning: Secondary composite plot generation failed: {str(e)}")
+            # Fall back to individual plots if composite fails
+            self._plot_importance(self.results['permutation_importance'], "Permutation Importance", f"{self.config.analysis_name}_permutation_importance.png")
+
     def run_and_generate_outputs(self):
         """A convenience method to run the full pipeline and save all plots."""
+        # Run core analysis
         self.run_analysis()
         
-        # if the model is a binary classifier, plot ROC curve
-        # in regressors, other evaluation metrics like RMSE are used
+        # Run significance testing
+        self._test_feature_significance()
+        
+        # Generate plots
+        print("Generating enhanced visualization outputs...")
+        
+        # ROC curve for classifiers
+        if self.config.model_type == 'classifier':
+            self.plot_roc_curve()
+        
+        # Enhanced composite plots
+        self._plot_primary_composite()
+        self._plot_secondary_composite()
+        
+        print(f"--- Analysis Complete: {self.config.analysis_name} ---")
+        print(f"All outputs saved to: {self.config.output_dir}")
+        
+        # Print summary of significant features
+        if 'significance_results' in self.results:
+            sig_results = self.results['significance_results']
+            print(f"--- Significance Testing Summary ---")
+            print(f"Gini significant features ({len(sig_results.gini_significant_features)}): {sig_results.gini_significant_features}")
+            print(f"SHAP significant features ({len(sig_results.shap_significant_features)}): {sig_results.shap_significant_features}")
+            print(f"Significance threshold: {sig_results.gini_threshold:.6f}")
+            print(f"Alpha level: {sig_results.alpha_level}")
+
+    def run_and_generate_outputs_legacy(self):
+        """Legacy method for backward compatibility - generates old-style plots."""
+        self.run_analysis()
+        
         if self.config.model_type == 'classifier':
             self.plot_roc_curve()
         
         self.plot_shap_summary()
         self.plot_feature_importance_grid()
         
-        print(f"--- Analysis Complete: {self.config.analysis_name} ---")
+        print(f"--- Legacy Analysis Complete: {self.config.analysis_name} ---")
         print(f"All outputs saved to: {self.config.output_dir}")
 

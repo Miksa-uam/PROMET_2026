@@ -98,6 +98,18 @@ class paper2_rf_config:
     classifier_threshold: Optional[float] = None
     threshold_direction: Optional[str] = None # 'greater_than_or_equal' or 'less_than_or_equal'
 
+    # --- Statistical Testing Configuration ---
+    enable_gini_significance: bool = True
+    enable_shap_significance: bool = True
+    significance_alpha: float = 0.05
+    
+    # --- Visualization Configuration ---
+    figure_width_primary: float = 16.0
+    figure_height_primary: float = 10.0
+    figure_width_secondary: float = 16.0
+    figure_height_secondary: float = 10.0
+    max_features_display: Optional[int] = None  # None = show all features
+
     # --- Data & Output Paths ---
     db_path: str = "../dbs/pnk_db2_p2_in.sqlite"
     input_table: str = "timetoevent_wgc_compl"
@@ -106,19 +118,19 @@ class paper2_rf_config:
     # --- Plotting & Labels ---
     nice_names: Dict[str, str] = field(default_factory=lambda: {
         "age": "Age (years)",
-        "sex_f": "Sex",
+        "sex_f": "Sex (Female)",
         "baseline_bmi": "Baseline BMI",
-        "womens_health_and_pregnancy": "Women's health or pregnancy",
+        "womens_health_and_pregnancy": "Women's health/pregnancy",
         "mental_health": "Mental health",
         "family_issues": "Family issues",
-        "medication_disease_injury": "Medication, disease or injury",
+        "medication_disease_injury": "Medication/disease/injury",
         "physical_inactivity": "Physical inactivity",
         "eating_habits": "Eating habits",
         "schedule": "Schedule",
         "smoking_cessation": "Smoking cessation",
-        "treatment_discontinuation_or_relapse": "Treatment discontinuation or relapse",
+        "treatment_discontinuation_or_relapse": "Treatment relapse",
         "pandemic": "COVID-19 pandemic",
-        "lifestyle_circumstances": "External circumstances",
+        "lifestyle_circumstances": "Lifestyle, circumstances",
         "none_of_above": "None of the above"
     })
 
@@ -128,6 +140,18 @@ class paper2_rf_config:
             raise ValueError("model_type must be 'classifier' or 'regressor'")
         if self.model_type == 'classifier' and (self.classifier_threshold is None or self.threshold_direction is None):
             raise ValueError("Classifier requires a threshold and direction.")
+        
+        # Validate statistical testing parameters
+        if not 0 < self.significance_alpha < 1:
+            raise ValueError("significance_alpha must be between 0 and 1")
+        
+        # Validate visualization parameters
+        if self.figure_width_primary <= 0 or self.figure_height_primary <= 0:
+            raise ValueError("Primary figure dimensions must be positive")
+        if self.figure_width_secondary <= 0 or self.figure_height_secondary <= 0:
+            raise ValueError("Secondary figure dimensions must be positive")
+        if self.max_features_display is not None and self.max_features_display <= 0:
+            raise ValueError("max_features_display must be positive or None")
 
 """
 0. MASTER CONFIG
