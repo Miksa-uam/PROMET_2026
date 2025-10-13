@@ -1,0 +1,13 @@
+cause,cause_pretty,risk_ratio,ci_lower,ci_upper,p_value,p_value_fdr,significant_raw,significant_fdr,n_present,n_absent,events_present,events_absent,risk_exposed,risk_unexposed
+womens_health_and_pregnancy,womens_health_and_pregnancy,1.000193,0.91148,1.097542,1.0,1.0,False,False,652,1811,314,872,0.481595,0.481502
+mental_health,mental_health,1.027704,0.935033,1.129561,0.605894,1.0,False,False,594,1869,292,894,0.491582,0.478331
+family_issues,family_issues,1.032044,0.862941,1.234284,0.802312,1.0,False,False,129,2334,64,1122,0.496124,0.48072
+medication_disease_injury,medication_disease_injury,0.869646,0.770338,0.981756,0.021472,0.128834,True,False,402,2061,172,1014,0.427861,0.491994
+physical_inactivity,physical_inactivity,1.135436,1.036034,1.244374,0.009805,0.117662,True,False,558,1905,296,890,0.530466,0.467192
+eating_habits,eating_habits,0.993134,0.910293,1.083514,0.910469,1.0,False,False,822,1641,394,792,0.479319,0.482633
+schedule,schedule,1.13961,0.977002,1.329281,0.137905,0.413716,False,False,147,2316,80,1106,0.544218,0.477547
+smoking_cessation,smoking_cessation,1.002185,0.841365,1.193745,1.0,1.0,False,False,143,2320,69,1117,0.482517,0.481466
+treatment_discontinuation_or_relapse,treatment_discontinuation_or_relapse,1.044304,0.927652,1.175624,0.518047,1.0,False,False,318,2145,159,1027,0.5,0.478788
+pandemic,pandemic,1.137293,1.017051,1.271752,0.036449,0.145795,True,False,314,2149,169,1017,0.538217,0.473243
+lifestyle_circumstances,lifestyle_circumstances,0.990589,0.883822,1.110253,0.914597,1.0,False,False,381,2082,182,1004,0.47769,0.482229
+none_of_above,none_of_above,0.933543,0.814292,1.070258,0.344038,0.825692,False,False,276,2187,125,1061,0.452899,0.485139

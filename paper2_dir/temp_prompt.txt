@@ -1,86 +1,58 @@
-I want to get the most out of Kiro, as the specification-driven development is a cool idea that could bring a lot of opportunity to my workflow. 
+I want to make forest plots that represent the likelihood of achieving 10% weight loss by weight gain causes using risk ratios. 
+The pipeline should be built as a single, self-contained script at best relying on existing helpers (for config, fdr corrections or statistical comparisons)
+that uses the timetoevent_wgc_compl table to stratify patients by weight gain causes, calculates the proportion of each cause group where 10%_wl_achieved = 1, calculates risk ratios based on these proportions and then plots them on forest plots based on the implementation plan below. 
 
-However I need to trust this system and understand its limitations to be able to adapt it. 
+### Implementation Plan: Forest Plot of Risk Ratios for 10% Weight Loss
 
-The experience with the FDR implementation is lukewarm. 
-The workflow seemed smooth, specifications were relevant, but the implementation was crazy. 
-How is it that the most important specs were not implemented? 
-- there was no fdr correction option in the notebook
-- when manually adding it, it was not recognized
-- and when finally making that fix, the fdr corrected p value column did not appear in the output
+**Objective**: To create a forest plot visualizing the risk ratio (and 95% confidence interval) of achieving >10% weight loss for patients with each specific Weight Gain Cause (WGC) compared to patients without that cause.
 
-We did a lot of refactoring, we changed the whole directory structure. 
-With all of that, Kiro seemed pretty intelligent and useful. 
-But these errors are still serious. 
+#### Step 1: Data Preparation (Input: Raw Data)
+1.  **Define your cohort**: Start with your complete dataset of all patients included in the analysis.
+2.  **Create the Outcome Variable**: Generate a binary column, let's call it `Achieved_10_Percent_WL`, where `1` = Yes and `0` = No.
+3.  **Identify Predictor Variables**: Ensure you have a set of binary columns, one for each of the 12 WGCs (e.g., `WGC_Mental_Health`, `WGC_Physical_Inactivity`), where `1` = cause is present and `0` = cause is absent.
 
-Without changing any code or anything, can you just do a bit of reflection on this project, tell me what went wrong, what are the limitations of Kiro in this context, and how can I make sure to bring the most out of this promising tool? 
+#### Step 2: Iterative Calculation and Statistical Testing
+You will now loop through each of your 12 WGCs. For each WGC (e.g., for `WGC_Mental_Health`):
+
+1.  **Create a 2x2 Contingency Table**: From your raw data, generate a table that cross-tabulates the WGC with the outcome:
+
+| | Achieved >10% WL | Did Not Achieve >10% WL |
+| :--- | :--- | :--- |
+| **WGC Present** | a | b |
+| **WGC Absent** | c | d |
+
+2.  **Calculate Risks**:
+    *   Risk in "Present" Group = `a / (a + b)`
+    *   Risk in "Absent" Group (Reference) = `c / (c + d)`
+
+3.  **Calculate the Risk Ratio (RR)**:
+    *   `RR = (Risk in "Present" Group) / (Risk in "Absent" Group)`
+
+4.  **Calculate the 95% Confidence Interval (CI)**:
+    *   Calculate the standard error of the log risk ratio: `SE(log(RR)) = sqrt( (1/a) - (1/(a+b)) + (1/c) - (1/(c+d)) )`
+    *   Calculate the CI on the log scale: `log(RR) ± 1.96 * SE(log(RR))`
+    *   Convert the CI back to the original scale by taking the exponential of the lower and upper bounds.
+
+5.  **Perform a Statistical Test**: On the same 2x2 table, run a **Chi-squared test of independence**. If any cell (`a`, `b`, `c`, or `d`) has a count less than 5, use a **Fisher's exact test** instead. Store the p-value.
+
+6: Adjust for Multiple Comparisons**:
+    *   Take the list of 12 p-values obtained from the statistical tests for each WGC.
+    *   Apply the Benjamini-Hochberg (FDR) correction to this list to generate a new list of "adjusted p-values" or "q-values."
+
+
+After iterating through all 12 WGCs, you will have a summary table with the WGC name, its RR, the lower CI bound, the upper CI bound, and the p-value.
+
+#### Step 3: Visualization (The Forest Plot)
+1.  **Set up the Plot**: Use a plotting library like `matplotlib` or `seaborn` in Python, or `ggplot2` in R.
+2.  **Y-axis**: List the names of the 12 WGCs.
+3.  **X-axis**: This will represent the Risk Ratio. **Crucially, set the x-axis to a logarithmic scale.** This is standard practice for ratio measures, as it makes effects of the same magnitude (e.g., RR=0.5 and RR=2.0) appear equidistant from the center.[1]
+4.  **Plot the Points and Intervals**: For each WGC, plot a point (e.g., a square) at its RR value. Draw a horizontal line through the point spanning from the lower to the upper CI bound.
+5.  **Add the Line of No Effect**: Draw a solid vertical line at `RR = 1.0`. This is the most important reference on the plot.
+6.  **Annotate Significance**: You can add asterisks next to the WGC names based on the p-values calculated in Step 2 (e.g., `*` for p<0.05).
 
 
 
-
-RF 
-
-(- gini significance cutoff with shadow features)
-(- shap significance test with t test against zero)
-- showing all features at all times, in order of importance on each figure, ie magnitude of effect
-- altering the output panels to make 2 bi-panel figs
--   1 for publication: Gini left, SHAP beeswarm right
--   1 for the bin: SHAP mean abs left, Permutation FI right
-
-
-
-
-
-
-### Task 1: Significance Testing Gini Feature Importance
-
-This task is using the robust "shadow feature" permutation method. It will provide a data-driven cutoff for the Gini importance plot
-
-**Objective**: To determine which features have a Gini importance score that is statistically greater than random chance.
-
-*   **Step 1: Create Shadow Features**
-    1.  Take your final training dataset (let's call it `X_train`), which contains all your original predictors (WGCs, age, sex, BMI).
-    2.  Create a complete copy of `X_train` and name it `X_shadow`.
-    3.  In `X_shadow`, iterate through each column (feature) and randomly shuffle its values. This breaks the link between the feature and the outcome but preserves its distribution.
-    4.  Rename the columns in `X_shadow` to avoid confusion (e.g., `Age` becomes `Age_shadow`).
-
-*   **Step 2: Augment Data and Train Model**
-    1.  Combine the original `X_train` and the new `X_shadow` into a single, wide dataset. This new dataset will have twice the number of features.
-    2.  Train your Random Forest classifier on this augmented dataset, using the same target variable (10% weight loss) and model settings as before.
-
-*   **Step 3: Establish Significance Threshold**
-    1.  After training, calculate the Gini importance for *all* features (both original and shadow).
-    2.  Isolate the importance scores of only the shadow features.
-    3.  Find the **maximum importance score** from this group of shadow features. This value is your significance cutoff. It represents the highest level of importance achieved by pure noise in your model.
-
-*   **Step 4: Identify Significant Features & Visualize**
-    1.  Compare the Gini importance score of each of your *original* features against the cutoff.
-    2.  **Any original feature with a Gini score greater than the cutoff is considered statistically significant.**
-    3.  To visualize, recreate your Gini importance bar plot and add a vertical dashed line at the cutoff value. This makes it immediately clear which features' importances are meaningful.
-
-***
-
-### Task 2: Significance Testing SHAP Value Distributions
-
-This is the more modern and often more powerful method. It directly tests the significance of the feature effects shown in your SHAP beeswarm plot (bottom right of your figure).
-
-**Objective**: To determine if the average effect of each feature on the model's prediction is statistically different from zero.
-
-*   **Step 1: Calculate SHAP Values**
-    1.  Train your Random Forest classifier on your **original** training data (no shadow features are needed here).
-    2.  Using the `shap` library, create an explainer (e.g., `shap.TreeExplainer`) for your trained model.
-    3.  Calculate the SHAP values for all features across all instances in your test set. This will give you a matrix of SHAP values where each row is a patient and each column is a feature.
-
-*   **Step 2: Perform a Non-Parametric Significance Test**
-    1.  As you correctly noted, these distributions are often not normal. Therefore, for each feature, you will perform a **one-sample Wilcoxon signed-rank test**.
-    2.  The null hypothesis for this test is that the median of the distribution of SHAP values for that feature is equal to zero.
-    3.  Loop through each feature's column of SHAP values and run this test. Store the resulting p-value for each feature.
-
-*   **Step 3: Correct for Multiple Comparisons**
-    1.  This step is critical for statistical rigor. Because you are running a separate test for each feature, you must adjust the p-values to control the false discovery rate.
-    2.  Apply the **Benjamini-Hochberg (FDR) correction** to the list of p-values you collected in the previous step. This will give you a set of "adjusted p-values."
-
-*   **Step 4: Identify Significant Features & Visualize**
-    1.  Compare your adjusted p-values to your significance level (e.g., α = 0.05).
-    2.  **Any feature with an adjusted p-value less than your alpha is considered to have a statistically significant impact on the model's output.**
-    3.  To visualize, annotate the feature names on your SHAP summary bar plot (like the one in the bottom left of your figure) with asterisks based on their adjusted p-values (e.g., `*` for p<0.05, `**` for p<0.01).
+Now that you have a general idea of my expectations (and can also see an AI-generated image of how the result could, approximately, look like),
+please first ideate whether the best approach is to load raw data into the pipeline or to use the existing stratified comparison tables? 
+Take time to understand the working directory structure, and that of the research i'm doing here. 
+Most importantly, evaluate which scripts, functions, modules that already exist in the directory can be used in creating this pipeline. 
