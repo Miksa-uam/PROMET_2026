@@ -1,0 +1,25 @@
+analysis_table,cause,outcome,multiple_testing_correction,n_total,min_cell_count,test_used,p_value,raw_significant,p_value_fdr,fdr_significant,contingency_a,contingency_b,contingency_c,contingency_d
+timetoevent_wgc_compl,womens_health_and_pregnancy,10%_wl_achieved,Benjamini-Hochberg FDR,2463,314,chi_squared,1.0,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),314,338,872,939
+timetoevent_wgc_compl,mental_health,10%_wl_achieved,Benjamini-Hochberg FDR,2463,292,chi_squared,0.605894,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),292,302,894,975
+timetoevent_wgc_compl,family_issues,10%_wl_achieved,Benjamini-Hochberg FDR,2463,64,chi_squared,0.802312,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),64,65,1122,1212
+timetoevent_wgc_compl,medication_disease_injury,10%_wl_achieved,Benjamini-Hochberg FDR,2463,172,chi_squared,0.021472,Significant (p < 0.05),0.128834,Not Significant (FDR >= 0.05),172,230,1014,1047
+timetoevent_wgc_compl,physical_inactivity,10%_wl_achieved,Benjamini-Hochberg FDR,2463,262,chi_squared,0.009805,Significant (p < 0.05),0.117662,Not Significant (FDR >= 0.05),296,262,890,1015
+timetoevent_wgc_compl,eating_habits,10%_wl_achieved,Benjamini-Hochberg FDR,2463,394,chi_squared,0.910469,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),394,428,792,849
+timetoevent_wgc_compl,schedule,10%_wl_achieved,Benjamini-Hochberg FDR,2463,67,chi_squared,0.137905,Not Significant (p >= 0.05),0.413716,Not Significant (FDR >= 0.05),80,67,1106,1210
+timetoevent_wgc_compl,smoking_cessation,10%_wl_achieved,Benjamini-Hochberg FDR,2463,69,chi_squared,1.0,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),69,74,1117,1203
+timetoevent_wgc_compl,treatment_discontinuation_or_relapse,10%_wl_achieved,Benjamini-Hochberg FDR,2463,159,chi_squared,0.518047,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),159,159,1027,1118
+timetoevent_wgc_compl,pandemic,10%_wl_achieved,Benjamini-Hochberg FDR,2463,145,chi_squared,0.036449,Significant (p < 0.05),0.145795,Not Significant (FDR >= 0.05),169,145,1017,1132
+timetoevent_wgc_compl,lifestyle_circumstances,10%_wl_achieved,Benjamini-Hochberg FDR,2463,182,chi_squared,0.914597,Not Significant (p >= 0.05),1.0,Not Significant (FDR >= 0.05),182,199,1004,1078
+timetoevent_wgc_compl,none_of_above,10%_wl_achieved,Benjamini-Hochberg FDR,2463,125,chi_squared,0.344038,Not Significant (p >= 0.05),0.825692,Not Significant (FDR >= 0.05),125,151,1061,1126
+timetoevent_wgc_compl,womens_health_and_pregnancy,60d_dropout,Benjamini-Hochberg FDR,2463,289,chi_squared,0.810525,Not Significant (p >= 0.05),0.922417,Not Significant (FDR >= 0.05),289,363,791,1020
+timetoevent_wgc_compl,mental_health,60d_dropout,Benjamini-Hochberg FDR,2463,246,chi_squared,0.185036,Not Significant (p >= 0.05),0.370071,Not Significant (FDR >= 0.05),246,348,834,1035
+timetoevent_wgc_compl,family_issues,60d_dropout,Benjamini-Hochberg FDR,2463,50,chi_squared,0.26893,Not Significant (p >= 0.05),0.460683,Not Significant (FDR >= 0.05),50,79,1030,1304
+timetoevent_wgc_compl,medication_disease_injury,60d_dropout,Benjamini-Hochberg FDR,2463,174,chi_squared,0.845549,Not Significant (p >= 0.05),0.922417,Not Significant (FDR >= 0.05),174,228,906,1155
+timetoevent_wgc_compl,physical_inactivity,60d_dropout,Benjamini-Hochberg FDR,2463,218,chi_squared,0.011104,Significant (p < 0.05),0.097828,Not Significant (FDR >= 0.05),218,340,862,1043
+timetoevent_wgc_compl,eating_habits,60d_dropout,Benjamini-Hochberg FDR,2463,362,chi_squared,0.927164,Not Significant (p >= 0.05),0.927164,Not Significant (FDR >= 0.05),362,460,718,923
+timetoevent_wgc_compl,schedule,60d_dropout,Benjamini-Hochberg FDR,2463,58,chi_squared,0.307122,Not Significant (p >= 0.05),0.460683,Not Significant (FDR >= 0.05),58,89,1022,1294
+timetoevent_wgc_compl,smoking_cessation,60d_dropout,Benjamini-Hochberg FDR,2463,71,chi_squared,0.175822,Not Significant (p >= 0.05),0.370071,Not Significant (FDR >= 0.05),71,72,1009,1311
+timetoevent_wgc_compl,treatment_discontinuation_or_relapse,60d_dropout,Benjamini-Hochberg FDR,2463,120,chi_squared,0.021813,Significant (p < 0.05),0.097828,Not Significant (FDR >= 0.05),120,198,960,1185
+timetoevent_wgc_compl,pandemic,60d_dropout,Benjamini-Hochberg FDR,2463,125,chi_squared,0.137891,Not Significant (p >= 0.05),0.370071,Not Significant (FDR >= 0.05),125,189,955,1194
+timetoevent_wgc_compl,lifestyle_circumstances,60d_dropout,Benjamini-Hochberg FDR,2463,171,chi_squared,0.69965,Not Significant (p >= 0.05),0.922417,Not Significant (FDR >= 0.05),171,210,909,1173
+timetoevent_wgc_compl,none_of_above,60d_dropout,Benjamini-Hochberg FDR,2463,137,chi_squared,0.024457,Significant (p < 0.05),0.097828,Not Significant (FDR >= 0.05),139,137,941,1246

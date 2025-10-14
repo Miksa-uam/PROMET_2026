@@ -1,0 +1,25 @@
+analysis_table,cause,outcome,effect_measure_type,n_present,n_absent,events_present,events_absent,risk_exposed,risk_unexposed,risk_ratio,rr_ci_lower,rr_ci_upper,risk_difference,rd_ci_lower,rd_ci_upper,contingency_a,contingency_b,contingency_c,contingency_d
+timetoevent_wgc_compl,womens_health_and_pregnancy,10%_wl_achieved,Both Risk Ratio and Risk Difference,652,1811,314,872,0.4816,0.4815,1.0002,0.9115,1.0975,0.0001,-0.0446,0.0448,314,338,872,939
+timetoevent_wgc_compl,mental_health,10%_wl_achieved,Both Risk Ratio and Risk Difference,594,1869,292,894,0.4916,0.4783,1.0277,0.935,1.1296,0.0133,-0.0329,0.0594,292,302,894,975
+timetoevent_wgc_compl,family_issues,10%_wl_achieved,Both Risk Ratio and Risk Difference,129,2334,64,1122,0.4961,0.4807,1.032,0.8629,1.2343,0.0154,-0.0732,0.104,64,65,1122,1212
+timetoevent_wgc_compl,medication_disease_injury,10%_wl_achieved,Both Risk Ratio and Risk Difference,402,2061,172,1014,0.4279,0.492,0.8696,0.7703,0.9818,-0.0641,-0.1171,-0.0112,172,230,1014,1047
+timetoevent_wgc_compl,physical_inactivity,10%_wl_achieved,Both Risk Ratio and Risk Difference,558,1905,296,890,0.5305,0.4672,1.1354,1.036,1.2444,0.0633,0.0162,0.1104,296,262,890,1015
+timetoevent_wgc_compl,eating_habits,10%_wl_achieved,Both Risk Ratio and Risk Difference,822,1641,394,792,0.4793,0.4826,0.9931,0.9103,1.0835,-0.0033,-0.0452,0.0385,394,428,792,849
+timetoevent_wgc_compl,schedule,10%_wl_achieved,Both Risk Ratio and Risk Difference,147,2316,80,1106,0.5442,0.4775,1.1396,0.977,1.3293,0.0667,-0.0164,0.1497,80,67,1106,1210
+timetoevent_wgc_compl,smoking_cessation,10%_wl_achieved,Both Risk Ratio and Risk Difference,143,2320,69,1117,0.4825,0.4815,1.0022,0.8414,1.1937,0.0011,-0.0833,0.0854,69,74,1117,1203
+timetoevent_wgc_compl,treatment_discontinuation_or_relapse,10%_wl_achieved,Both Risk Ratio and Risk Difference,318,2145,159,1027,0.5,0.4788,1.0443,0.9277,1.1756,0.0212,-0.0377,0.0801,159,159,1027,1118
+timetoevent_wgc_compl,pandemic,10%_wl_achieved,Both Risk Ratio and Risk Difference,314,2149,169,1017,0.5382,0.4732,1.1373,1.0171,1.2718,0.065,0.0059,0.124,169,145,1017,1132
+timetoevent_wgc_compl,lifestyle_circumstances,10%_wl_achieved,Both Risk Ratio and Risk Difference,381,2082,182,1004,0.4777,0.4822,0.9906,0.8838,1.1103,-0.0045,-0.0591,0.05,182,199,1004,1078
+timetoevent_wgc_compl,none_of_above,10%_wl_achieved,Both Risk Ratio and Risk Difference,276,2187,125,1061,0.4529,0.4851,0.9335,0.8143,1.0703,-0.0322,-0.0946,0.0301,125,151,1061,1126
+timetoevent_wgc_compl,womens_health_and_pregnancy,60d_dropout,Both Risk Ratio and Risk Difference,652,1811,289,791,0.4433,0.4368,1.0148,0.9176,1.1223,0.0065,-0.038,0.0509,289,363,791,1020
+timetoevent_wgc_compl,mental_health,60d_dropout,Both Risk Ratio and Risk Difference,594,1869,246,834,0.4141,0.4462,0.9281,0.8329,1.0341,-0.0321,-0.0777,0.0135,246,348,834,1035
+timetoevent_wgc_compl,family_issues,60d_dropout,Both Risk Ratio and Risk Difference,129,2334,50,1030,0.3876,0.4413,0.8783,0.7037,1.0963,-0.0537,-0.1402,0.0327,50,79,1030,1304
+timetoevent_wgc_compl,medication_disease_injury,60d_dropout,Both Risk Ratio and Risk Difference,402,2061,174,906,0.4328,0.4396,0.9846,0.8715,1.1125,-0.0068,-0.0597,0.0462,174,228,906,1155
+timetoevent_wgc_compl,physical_inactivity,60d_dropout,Both Risk Ratio and Risk Difference,558,1905,218,862,0.3907,0.4525,0.8634,0.7698,0.9684,-0.0618,-0.1081,-0.0156,218,340,862,1043
+timetoevent_wgc_compl,eating_habits,60d_dropout,Both Risk Ratio and Risk Difference,822,1641,362,718,0.4404,0.4375,1.0065,0.9157,1.1064,0.0029,-0.0387,0.0444,362,460,718,923
+timetoevent_wgc_compl,schedule,60d_dropout,Both Risk Ratio and Risk Difference,147,2316,58,1022,0.3946,0.4413,0.8941,0.7281,1.098,-0.0467,-0.1283,0.0348,58,89,1022,1294
+timetoevent_wgc_compl,smoking_cessation,60d_dropout,Both Risk Ratio and Risk Difference,143,2320,71,1009,0.4965,0.4349,1.1416,0.9617,1.3551,0.0616,-0.0228,0.146,71,72,1009,1311
+timetoevent_wgc_compl,treatment_discontinuation_or_relapse,60d_dropout,Both Risk Ratio and Risk Difference,318,2145,120,960,0.3774,0.4476,0.8432,0.7266,0.9784,-0.0702,-0.1275,-0.0129,120,198,960,1185
+timetoevent_wgc_compl,pandemic,60d_dropout,Both Risk Ratio and Risk Difference,314,2149,125,955,0.3981,0.4444,0.8958,0.7757,1.0345,-0.0463,-0.1044,0.0118,125,189,955,1194
+timetoevent_wgc_compl,lifestyle_circumstances,60d_dropout,Both Risk Ratio and Risk Difference,381,2082,171,909,0.4488,0.4366,1.028,0.9104,1.1608,0.0122,-0.0421,0.0665,171,210,909,1173
+timetoevent_wgc_compl,none_of_above,60d_dropout,Both Risk Ratio and Risk Difference,276,2187,139,941,0.5036,0.4303,1.1705,1.0312,1.3285,0.0734,0.0108,0.1359,139,137,941,1246

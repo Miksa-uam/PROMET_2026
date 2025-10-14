@@ -1,0 +1,30 @@
+============================================================
+DESCRIPTIVE VISUALIZATIONS PIPELINE - OUTPUT SUMMARY
+============================================================
+Analysis Date: 2025-10-14 18:32:19
+Input Table: timetoevent_wgc_compl
+
+ANALYSIS OVERVIEW:
+- Outcomes analyzed: 2 (10%_wl_achieved, 60d_dropout)
+- Weight gain causes: 12
+- Total comparisons: 24
+
+STATISTICAL TESTING SUMMARY:
+- Valid statistical tests: 24/24
+- Valid FDR corrections: 24/24
+- Raw significant results (p < 0.05): 6/24
+- FDR significant results (FDR < 0.05): 0/24
+
+OUTPUT FILES GENERATED:
+- effect_sizes_summary: effect_sizes_summary_timetoevent_wgc_compl.csv
+- statistical_tests_summary: statistical_tests_summary_timetoevent_wgc_compl.csv
+- comprehensive_results: comprehensive_results_timetoevent_wgc_compl.csv
+- analysis_metadata: analysis_metadata_timetoevent_wgc_compl.csv
+
+FOREST PLOTS GENERATED:
+- 10%_wl_achieved: risk_ratios_10pct_wl_achieved.png, risk_differences_10pct_wl_achieved.png
+- 60d_dropout: risk_ratios_60d_dropout.png, risk_differences_60d_dropout.png
+
+============================================================
+END OF SUMMARY
+============================================================
