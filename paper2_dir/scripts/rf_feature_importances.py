@@ -19,6 +19,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import seaborn as sns
 import shap
 import logging
@@ -34,6 +35,7 @@ from sklearn.inspection import permutation_importance
 
 from paper12_config import paper2_rf_config
 from fdr_correction_utils import apply_fdr_correction
+from variable_names_utils import get_human_readable_name
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -99,7 +101,7 @@ class RandomForestAnalyzer:
 
     def _get_nice_name(self, feature_name: str) -> str:
         """Get display name for a feature. Use snake_case internally, nice names only for display."""
-        return self.config.nice_names.get(feature_name, feature_name)
+        return get_human_readable_name(feature_name)
 
     def _load_and_prepare_data(self):
         """Load data and prepare the outcome variable."""
@@ -205,10 +207,18 @@ class RandomForestAnalyzer:
     def _create_shadow_features(self, X_train: pd.DataFrame) -> pd.DataFrame:
         """Create shadow features by randomly shuffling each original feature."""
         X_shadow = X_train.copy()
-        np.random.seed(42)
+        np.random.seed(42)  # Set seed for reproducibility
+        
+        # Shuffle each column independently to break relationships with target
         for col in X_shadow.columns:
             X_shadow[col] = np.random.permutation(X_shadow[col].values)
+        
+        # Rename shadow features
         X_shadow.columns = [f"{col}_shadow" for col in X_shadow.columns]
+        
+        print(f"DEBUG: Created {len(X_shadow.columns)} shadow features")
+        print(f"DEBUG: Shadow feature names: {list(X_shadow.columns)[:3]}...")  # Show first 3
+        
         return X_shadow
 
     def _test_gini_significance(self) -> Tuple[float, List[str], Dict[str, float]]:
@@ -221,7 +231,11 @@ class RandomForestAnalyzer:
             X_shadow = self._create_shadow_features(self.X_train)
             X_augmented = pd.concat([self.X_train, X_shadow], axis=1)
             
-            # Train model on augmented dataset
+            print(f"DEBUG: Original features: {len(self.X_train.columns)}")
+            print(f"DEBUG: Shadow features: {len(X_shadow.columns)}")
+            print(f"DEBUG: Total augmented features: {len(X_augmented.columns)}")
+            
+            # Train model on augmented dataset with same parameters as main model
             if self.config.model_type == 'classifier':
                 model = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=42, n_jobs=-1)
             else:
@@ -234,16 +248,57 @@ class RandomForestAnalyzer:
             shadow_importances = {feat: all_importances[feat] for feat in X_shadow.columns}
             original_importances = {feat: all_importances[feat] for feat in self.X_train.columns}
             
-            # Calculate threshold and significant features
-            threshold = max(shadow_importances.values()) if shadow_importances else 0.0
+            # DEBUG: Print shadow feature statistics
+            shadow_values = list(shadow_importances.values())
+            print(f"DEBUG Shadow importances stats:")
+            print(f"  Min: {min(shadow_values):.6f}")
+            print(f"  Max: {max(shadow_values):.6f}")
+            print(f"  Mean: {np.mean(shadow_values):.6f}")
+            print(f"  Median: {np.median(shadow_values):.6f}")
+            print(f"  Top 3 shadow features: {sorted(shadow_importances.items(), key=lambda x: x[1], reverse=True)[:3]}")
+            
+            # Calculate threshold using multiple approaches
+            if shadow_importances:
+                shadow_values = list(shadow_importances.values())
+                
+                # Method 1: Maximum shadow importance (original approach)
+                threshold_max = max(shadow_values)
+                
+                # Method 2: 95th percentile of shadow importances (more conservative)
+                threshold_95th = np.percentile(shadow_values, 95)
+                
+                # Method 3: Mean + 2*std of shadow importances (statistical approach)
+                threshold_stat = np.mean(shadow_values) + 2 * np.std(shadow_values)
+                
+                print(f"DEBUG Threshold options:")
+                print(f"  Max shadow: {threshold_max:.6f}")
+                print(f"  95th percentile: {threshold_95th:.6f}")
+                print(f"  Mean + 2*std: {threshold_stat:.6f}")
+                
+                # CHANGED: Use 95th percentile method (more conservative and stable)
+                threshold = threshold_95th
+                
+                # Also calculate significant features for alternative thresholds for comparison
+                sig_features_max = [feat for feat, imp in original_importances.items() if imp > threshold_max]
+                sig_features_stat = [feat for feat, imp in original_importances.items() if imp > threshold_stat]
+                
+                print(f"DEBUG Significant features by method:")
+                print(f"  Max threshold: {len(sig_features_max)} features")
+                print(f"  95th percentile (SELECTED): {len([feat for feat, imp in original_importances.items() if imp > threshold_95th])} features")
+                print(f"  Statistical: {len(sig_features_stat)} features")
+                print(f"USING 95th percentile method for more stable results")
+                
+            else:
+                threshold = 0.0
+            
             significant_features = [feat for feat, imp in original_importances.items() if imp > threshold]
             
             # DEBUG: Print detailed results
             print(f"DEBUG Gini significance: threshold={threshold:.6f}")
-            print(f"DEBUG Original importances: {original_importances}")
+            print(f"DEBUG Original importances (top 5): {sorted(original_importances.items(), key=lambda x: x[1], reverse=True)[:5]}")
             print(f"DEBUG Significant features: {significant_features}")
             print(f"DEBUG Features above threshold:")
-            for feat, imp in original_importances.items():
+            for feat, imp in sorted(original_importances.items(), key=lambda x: x[1], reverse=True):
                 above_threshold = imp > threshold
                 print(f"  {feat}: {imp:.6f} > {threshold:.6f} = {above_threshold}")
             
@@ -251,30 +306,94 @@ class RandomForestAnalyzer:
             
         except Exception as e:
             print(f"Warning: Gini significance testing failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return 0.0, [], {}
 
     def _test_shap_significance(self, shap_values: np.ndarray, feature_names: List[str]) -> Tuple[Dict[str, float], Dict[str, float], List[str]]:
-        """Test SHAP value significance using Wilcoxon signed-rank tests with FDR correction."""
+        """
+        Test SHAP value significance using Wilcoxon signed-rank tests with FDR correction.
+        
+        SHAP Significance Explanation:
+        - Tests whether each feature's SHAP values are significantly different from zero
+        - Uses Wilcoxon signed-rank test (non-parametric test for paired data)
+        - Null hypothesis: median SHAP value = 0 (feature has no impact)
+        - Alternative: median SHAP value ≠ 0 (feature has consistent impact)
+        - FDR correction controls false discovery rate across multiple tests
+        """
         if not self.config.enable_shap_significance:
             return {}, {}, []
         
         try:
-            print("Testing SHAP significance with Wilcoxon tests...")
+            print("="*60)
+            print("SHAP SIGNIFICANCE TESTING - DETAILED EXPLANATION")
+            print("="*60)
+            print("WHAT WE'RE TESTING:")
+            print("- Null hypothesis (H0): Feature has no consistent impact (median SHAP = 0)")
+            print("- Alternative (H1): Feature has consistent impact (median SHAP ≠ 0)")
+            print("- Method: Wilcoxon signed-rank test (non-parametric)")
+            print("- Multiple testing correction: Benjamini-Hochberg FDR")
+            print()
+            
             raw_pvalues = {}
+            shap_statistics = {}
+            
+            print("ANALYZING EACH FEATURE:")
+            print("-" * 60)
             
             for i, feature_name in enumerate(feature_names):
                 feature_shap_values = shap_values[:, i]
+                
+                # Calculate descriptive statistics
+                n_samples = len(feature_shap_values)
+                mean_shap = np.mean(feature_shap_values)
+                median_shap = np.median(feature_shap_values)
+                std_shap = np.std(feature_shap_values)
+                n_positive = np.sum(feature_shap_values > 0)
+                n_negative = np.sum(feature_shap_values < 0)
+                n_zero = np.sum(feature_shap_values == 0)
+                
+                # Store statistics for later analysis
+                shap_statistics[feature_name] = {
+                    'mean': mean_shap,
+                    'median': median_shap,
+                    'std': std_shap,
+                    'n_positive': n_positive,
+                    'n_negative': n_negative,
+                    'n_zero': n_zero,
+                    'n_samples': n_samples
+                }
+                
+                print(f"{feature_name}:")
+                print(f"  Samples: {n_samples} | Mean: {mean_shap:.6f} | Median: {median_shap:.6f}")
+                print(f"  Positive: {n_positive} ({n_positive/n_samples*100:.1f}%) | Negative: {n_negative} ({n_negative/n_samples*100:.1f}%) | Zero: {n_zero}")
+                
+                # Perform significance test
                 if np.all(feature_shap_values == 0):
                     raw_pvalues[feature_name] = 1.0
-                    continue
+                    print(f"  Result: All SHAP values are zero → p-value = 1.0 (not significant)")
+                else:
+                    try:
+                        # Wilcoxon signed-rank test
+                        statistic, p_value = wilcoxon(feature_shap_values, alternative='two-sided')
+                        raw_pvalues[feature_name] = p_value
+                        
+                        # Interpret the test result
+                        if p_value < 0.05:
+                            direction = "positive" if median_shap > 0 else "negative"
+                            print(f"  Result: p = {p_value:.6f} → SIGNIFICANT {direction} impact")
+                        else:
+                            print(f"  Result: p = {p_value:.6f} → Not significant (could be random)")
+                            
+                    except ValueError as e:
+                        raw_pvalues[feature_name] = 1.0
+                        print(f"  Result: Test failed ({str(e)}) → p-value = 1.0")
                 
-                try:
-                    _, p_value = wilcoxon(feature_shap_values, alternative='two-sided')
-                    raw_pvalues[feature_name] = p_value
-                except ValueError:
-                    raw_pvalues[feature_name] = 1.0
+                print()
             
             # Apply FDR correction
+            print("MULTIPLE TESTING CORRECTION:")
+            print("-" * 60)
             p_values_list = list(raw_pvalues.values())
             adjusted_p_values_list = apply_fdr_correction(p_values_list, alpha=self.config.significance_alpha)
             adjusted_pvalues = dict(zip(feature_names, adjusted_p_values_list))
@@ -283,11 +402,42 @@ class RandomForestAnalyzer:
             significant_features = [feat for feat, adj_p in adjusted_pvalues.items() 
                                   if adj_p < self.config.significance_alpha]
             
-            print(f"SHAP significance: {len(significant_features)} significant after FDR correction")
+            print(f"Applied Benjamini-Hochberg FDR correction (α = {self.config.significance_alpha})")
+            print(f"Raw significant (p < 0.05): {sum(1 for p in raw_pvalues.values() if p < 0.05)}/{len(feature_names)}")
+            print(f"FDR significant (adj p < {self.config.significance_alpha}): {len(significant_features)}/{len(feature_names)}")
+            print()
+            
+            # Detailed breakdown of results
+            print("FINAL RESULTS BREAKDOWN:")
+            print("-" * 60)
+            
+            # Sort by adjusted p-value
+            sorted_results = sorted(adjusted_pvalues.items(), key=lambda x: x[1])
+            
+            for feat, adj_p in sorted_results:
+                raw_p = raw_pvalues[feat]
+                stats = shap_statistics[feat]
+                is_sig = adj_p < self.config.significance_alpha
+                
+                status = "SIGNIFICANT" if is_sig else "Not significant"
+                direction = ""
+                if is_sig and stats['median'] != 0:
+                    direction = f" ({'+' if stats['median'] > 0 else '-'})"
+                
+                print(f"{feat}: {status}{direction}")
+                print(f"  Raw p: {raw_p:.6f} | Adj p: {adj_p:.6f} | Median SHAP: {stats['median']:.6f}")
+            
+            print()
+            print("="*60)
+            print(f"SUMMARY: {len(significant_features)} features have significant SHAP impact")
+            print("="*60)
+            
             return raw_pvalues, adjusted_pvalues, significant_features
             
         except Exception as e:
             print(f"Warning: SHAP significance testing failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return {}, {}, []
 
     def _test_feature_significance(self):
@@ -338,7 +488,7 @@ class RandomForestAnalyzer:
         """
         Add significance asterisks and red coloring to feature labels.
         
-        CRITICAL FIX: This method properly handles the name matching by:
+        FIXED: This method now properly handles the name matching by:
         1. Working with original snake_case names for logic (significant_snake_case_names)
         2. Modifying the display labels (nice names) that are already set on the plot
         3. Ensuring the order matches between snake_case names and plot labels
@@ -350,45 +500,63 @@ class RandomForestAnalyzer:
         """
         try:
             # DEBUG: Print what we're working with
-            print(f"DEBUG: Ordered snake_case names: {ordered_snake_case_names}")
-            print(f"DEBUG: Significant snake_case names: {significant_snake_case_names}")
+            print(f"DEBUG ANNOTATION: Ordered snake_case names: {ordered_snake_case_names}")
+            print(f"DEBUG ANNOTATION: Significant snake_case names: {significant_snake_case_names}")
+            
+            # Get current tick labels
+            current_labels = [label.get_text() for label in ax.get_yticklabels()]
+            print(f"DEBUG ANNOTATION: Current labels on plot: {current_labels}")
+            
+            # Verify lengths match
+            if len(ordered_snake_case_names) != len(current_labels):
+                print(f"ERROR: Length mismatch! Snake names: {len(ordered_snake_case_names)}, Labels: {len(current_labels)}")
+                print(f"This indicates a bug in the feature ordering logic.")
+                return
+            
+            # Create new labels with significance annotations
+            new_labels = []
+            new_colors = []
             
             for i, original_feature_name in enumerate(ordered_snake_case_names):
-                current_label = ax.get_yticklabels()[i].get_text()
-                print(f"DEBUG: Feature {i}: '{original_feature_name}' -> '{current_label}' -> Significant: {original_feature_name in significant_snake_case_names}")
-                
-                if original_feature_name in significant_snake_case_names:
-                    # Get current display label (nice name) and add asterisk
-                    new_label = f"{current_label} *"
+                if i < len(current_labels):
+                    current_label = current_labels[i]
+                    is_significant = original_feature_name in significant_snake_case_names
                     
-                    # Update label with asterisk and red color
-                    ax.get_yticklabels()[i].set_text(new_label)
-                    ax.get_yticklabels()[i].set_color(self.colors['significant_text'])
-                    print(f"DEBUG: Applied significance to '{original_feature_name}': '{new_label}' in red")
-                else:
-                    # Non-significant features in gray
-                    ax.get_yticklabels()[i].set_color(self.colors['non_significant_text'])
-                    print(f"DEBUG: Applied gray to '{original_feature_name}'")
+                    # Verify the mapping makes sense
+                    expected_nice_name = self._get_nice_name(original_feature_name)
+                    if current_label != expected_nice_name:
+                        print(f"WARNING: Label mismatch at position {i}:")
+                        print(f"  Snake name: '{original_feature_name}'")
+                        print(f"  Expected nice name: '{expected_nice_name}'")
+                        print(f"  Actual label: '{current_label}'")
+                    
+                    print(f"DEBUG ANNOTATION: Feature {i}: '{original_feature_name}' -> '{current_label}' -> Significant: {is_significant}")
+                    
+                    if is_significant:
+                        # Add asterisk to significant features
+                        new_label = f"{current_label} *"
+                        new_labels.append(new_label)
+                        new_colors.append(self.colors['significant_text'])
+                        print(f"DEBUG ANNOTATION: Applied significance to '{original_feature_name}': '{new_label}' in red")
+                    else:
+                        # Keep original label for non-significant features
+                        new_labels.append(current_label)
+                        new_colors.append(self.colors['non_significant_text'])
+                        print(f"DEBUG ANNOTATION: Applied gray to '{original_feature_name}': '{current_label}'")
+            
+            # Apply all changes at once
+            ax.set_yticklabels(new_labels)
+            for i, color in enumerate(new_colors):
+                if i < len(ax.get_yticklabels()):
+                    ax.get_yticklabels()[i].set_color(color)
                     
         except Exception as e:
             print(f"ERROR in significance annotations: {str(e)}")
             import traceback
             traceback.print_exc()
 
-    def _add_significance_threshold_line(self, ax, threshold: float) -> None:
-        """Add vertical dashed line showing significance threshold."""
-        try:
-            ax.axvline(x=threshold, color=self.colors['significance_line'], 
-                      linestyle='--', linewidth=2, alpha=0.8)
-            
-            # Add text annotation
-            y_pos = ax.get_ylim()[1] * 0.95
-            ax.text(threshold, y_pos, f'Threshold\\n{threshold:.4f}', 
-                   ha='center', va='top', fontsize=9, 
-                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-                   
-        except Exception as e:
-            logger.warning(f"Failed to add significance threshold line: {str(e)}")
+    # REMOVED: _add_significance_threshold_line method - no longer needed
+    # Significance is now indicated only through asterisks and colors
 
     def _create_gini_importance_panel(self, ax, gini_importance: pd.Series, 
                                     significance_results: SignificanceResults = None) -> None:
@@ -402,13 +570,16 @@ class RandomForestAnalyzer:
             # Step 2: Create nice labels for display ONLY
             nice_labels = [self._get_nice_name(name) for name in ordered_snake_case_names]
             
-            # Step 3: Create plot with nice labels for display
+            # Step 3: Create plot with nice labels for display (adjusted for longer labels)
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['gini'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=10)
-            ax.set_xlabel('Gini Importance (Mean Decrease in Impurity)', fontsize=11)
-            ax.set_title('Gini Feature Importance', fontsize=12, fontweight='bold')
+            ax.set_yticklabels(nice_labels, fontsize=8, ha='right')  # EXACT MATCH to secondary plot
+            ax.set_xlabel('Gini Importance (Mean Decrease in Impurity)', fontsize=10)  # EXACT MATCH
+            ax.set_title('Gini Feature Importance', fontsize=11, fontweight='bold')  # EXACT MATCH
+            
+            # Adjust margins to accommodate longer labels
+            ax.margins(y=0.01)  # Tighter vertical margins
             
             # Step 4: Add significance annotations - use original names for logic
             print(f"DEBUG GINI: Checking significance results...")
@@ -426,10 +597,8 @@ class RandomForestAnalyzer:
                 else:
                     print(f"DEBUG GINI: No significant features to annotate")
                 
-                # Add significance threshold line (always show if we have results)
-                if significance_results.gini_threshold > 0:
-                    print(f"DEBUG GINI: Adding threshold line at {significance_results.gini_threshold}")
-                    self._add_significance_threshold_line(ax, significance_results.gini_threshold)
+                # REMOVED: Threshold line removed as requested - significance shown only via asterisks and colors
+                print(f"DEBUG GINI: Threshold line removed - using only asterisks and colors for significance")
             else:
                 print(f"DEBUG GINI: No significance results available")
             
@@ -463,20 +632,52 @@ class RandomForestAnalyzer:
                 feature_names=[self._get_nice_name(name) for name in ordered_snake_case_names]
             )
             
-            # Step 3: Create beeswarm plot
+            # Step 3: Create beeswarm plot with adjustments for longer labels
             shap.plots.beeswarm(ordered_explanation, 
                                max_display=self.config.max_features_display or len(shap_explanation.feature_names),
                                show=False)
-            ax.set_title('SHAP Value Distribution', fontsize=12, fontweight='bold')
+            ax.set_title('SHAP Value Distribution', fontsize=11, fontweight='bold')  # EXACT MATCH to secondary
             
-            # Step 4: Add significance annotations - use original names for logic
+            # EXACT MATCH to secondary plot settings
+            ax.tick_params(axis='y', labelsize=8)
+            ax.margins(y=0.01)  # Tighter vertical margins
+            
+            # Step 4: CRITICAL FIX - Get the actual order from the plot after SHAP creates it
             if significance_results and significance_results.shap_significant_features:
+                # Get the current labels from the plot (these are the nice names in the order SHAP created them)
+                current_labels = [label.get_text() for label in ax.get_yticklabels()]
+                
+                # Create reverse mapping from nice names back to snake_case names
+                nice_to_snake = {self._get_nice_name(snake): snake for snake in ordered_snake_case_names}
+                
+                # Get the snake_case names in the order they appear on the plot
+                plot_ordered_snake_names = []
+                for nice_label in current_labels:
+                    if nice_label in nice_to_snake:
+                        plot_ordered_snake_names.append(nice_to_snake[nice_label])
+                    else:
+                        print(f"WARNING: Could not find snake_case name for label '{nice_label}'")
+                        # Try to find a partial match
+                        for snake, nice in [(s, self._get_nice_name(s)) for s in ordered_snake_case_names]:
+                            if nice_label in nice or nice in nice_label:
+                                plot_ordered_snake_names.append(snake)
+                                print(f"  Found partial match: '{nice_label}' -> '{snake}'")
+                                break
+                        else:
+                            print(f"  No match found for '{nice_label}', skipping")
+                
+                print(f"DEBUG SHAP: Plot order snake_case names: {plot_ordered_snake_names}")
+                print(f"DEBUG SHAP: Plot labels: {current_labels}")
+                
+                # Now use the correct order for annotations
                 self._add_significance_annotations(
-                    ax, ordered_snake_case_names, significance_results.shap_significant_features
+                    ax, plot_ordered_snake_names, significance_results.shap_significant_features
                 )
             
         except Exception as e:
             logger.error(f"Failed to create SHAP beeswarm panel: {str(e)}")
+            import traceback
+            traceback.print_exc()
             ax.text(0.5, 0.5, 'Error creating SHAP beeswarm plot', ha='center', va='center', transform=ax.transAxes)
 
     def _create_mean_shap_panel(self, ax, shap_explanation) -> None:
@@ -492,15 +693,16 @@ class RandomForestAnalyzer:
             # Create nice labels for display
             nice_labels = [self._get_nice_name(name) for name in ordered_snake_case_names]
             
-            # Create plot
+            # Create plot with adjustments for longer labels
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['shap_bar'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=10)
-            ax.set_xlabel('Mean Absolute SHAP Value', fontsize=11)
-            ax.set_title('Mean Absolute SHAP Values', fontsize=12, fontweight='bold')
+            ax.set_yticklabels(nice_labels, fontsize=8, ha='right')  # Smaller font, right-aligned
+            ax.set_xlabel('Mean Absolute SHAP Value', fontsize=10)
+            ax.set_title('Mean Absolute SHAP Values', fontsize=11, fontweight='bold')
             ax.grid(True, alpha=0.3)
             ax.set_axisbelow(True)
+            ax.margins(y=0.01)  # Tighter vertical margins
             
         except Exception as e:
             logger.error(f"Failed to create mean SHAP panel: {str(e)}")
@@ -517,15 +719,16 @@ class RandomForestAnalyzer:
             # Create nice labels for display
             nice_labels = [self._get_nice_name(name) for name in ordered_snake_case_names]
             
-            # Create plot
+            # Create plot with adjustments for longer labels
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['permutation'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=10)
-            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=11)
-            ax.set_title('Permutation Feature Importance', fontsize=12, fontweight='bold')
+            ax.set_yticklabels(nice_labels, fontsize=8, ha='right')  # Smaller font, right-aligned
+            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=10)
+            ax.set_title('Permutation Feature Importance', fontsize=11, fontweight='bold')
             ax.grid(True, alpha=0.3)
             ax.set_axisbelow(True)
+            ax.margins(y=0.01)  # Tighter vertical margins
             
         except Exception as e:
             logger.error(f"Failed to create permutation importance panel: {str(e)}")
@@ -533,19 +736,14 @@ class RandomForestAnalyzer:
 
     def _calculate_figure_dimensions(self, n_features: int, plot_type: str = 'primary') -> Tuple[float, float]:
         """Calculate optimal figure dimensions based on number of features."""
-        if plot_type == 'primary':
-            base_width = self.config.figure_width_primary
-            base_height = self.config.figure_height_primary
-        else:
-            base_width = self.config.figure_width_secondary
-            base_height = self.config.figure_height_secondary
+        # FORCE IDENTICAL LARGE DIMENSIONS for both plots
+        # Use the dimensions that clearly work well for the secondary plot
+        forced_width = 24.0  # Large width that works
+        forced_height = max(16.0, n_features * 0.6 + 4)  # Dynamic height with generous spacing
+        forced_height = min(forced_height, 24.0)  # Reasonable max
         
-        # Adjust height based on number of features
-        min_height_per_feature = 0.4
-        calculated_height = max(base_height, n_features * min_height_per_feature + 2)
-        calculated_height = min(calculated_height, 20.0)  # Max height limit
-        
-        return base_width, calculated_height
+        print(f"DEBUG DIMENSIONS: {plot_type} plot - FORCED width: {forced_width}, height: {forced_height}, n_features: {n_features}")
+        return forced_width, forced_height
 
     def _plot_primary_composite(self):
         """Create primary composite plot: Gini importance + SHAP beeswarm."""
@@ -561,17 +759,19 @@ class RandomForestAnalyzer:
             n_features = len(gini_importance)
             fig_width, fig_height = self._calculate_figure_dimensions(n_features, 'primary')
             
-            # Create figure
+            # Create figure with adjusted proportions for longer labels
             plt.style.use('seaborn-v0_8-whitegrid')
+            
+            # Use the SAME approach as secondary plot (which works perfectly)
             fig, (ax_gini, ax_shap) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
             fig.suptitle(f'Feature Importance Analysis: {self.config.analysis_name}', 
-                        fontsize=14, fontweight='bold', y=0.98)
+                        fontsize=14, fontweight='bold', y=0.98)  # EXACT MATCH to secondary plot
             
             # Create panels
             self._create_gini_importance_panel(ax_gini, gini_importance, significance_results)
             self._create_shap_beeswarm_panel(ax_shap, shap_explanation, significance_results)
             
-            # Save and show
+            # Use the SAME layout approach as secondary plot
             plt.tight_layout()
             plt.subplots_adjust(top=0.93)
             output_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_primary_FI_composite.png")

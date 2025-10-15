@@ -116,23 +116,8 @@ class paper2_rf_config:
     output_dir: str = "../outputs/rf_outputs"
 
     # --- Plotting & Labels ---
-    nice_names: Dict[str, str] = field(default_factory=lambda: {
-        "age": "Age (years)",
-        "sex_f": "Sex (Female)",
-        "baseline_bmi": "Baseline BMI",
-        "womens_health_and_pregnancy": "Women's health/pregnancy",
-        "mental_health": "Mental health",
-        "family_issues": "Family issues",
-        "medication_disease_injury": "Medication/disease/injury",
-        "physical_inactivity": "Physical inactivity",
-        "eating_habits": "Eating habits",
-        "schedule": "Schedule",
-        "smoking_cessation": "Smoking cessation",
-        "treatment_discontinuation_or_relapse": "Treatment relapse",
-        "pandemic": "COVID-19 pandemic",
-        "lifestyle_circumstances": "Lifestyle, circumstances",
-        "none_of_above": "None of the above"
-    })
+    # REMOVED: nice_names dictionary - now using centralized human_readable_variable_names.json
+    # Variable names are loaded dynamically via variable_names_utils.py
 
     def __post_init__(self):
         """Validate configuration after creation."""

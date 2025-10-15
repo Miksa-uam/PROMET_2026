@@ -211,9 +211,10 @@ def calculate_percentage_changes(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 def create_lollipop_plot(data: pd.DataFrame, output_path: str = None, 
-                        title: str = "Percent Difference: WGC vs All Patients",
+                        title: str = "Key clinical differences between patients with and without reported weight gain causes",
                         figsize: Tuple[int, int] = (10, 8),
-                        preserve_order: bool = False) -> None:
+                        preserve_order: bool = False, 
+                        wgc_n: int = None, mother_n: int = None) -> None:
     """
     Create a publication-ready lollipop plot showing percentage differences.
     
@@ -230,6 +231,10 @@ def create_lollipop_plot(data: pd.DataFrame, output_path: str = None,
     preserve_order : bool
         If True, preserves the order of variables as provided in data.
         If False, sorts by absolute percentage change for better visualization.
+    wgc_n : int, optional
+        Sample size for WGC cohort (patients with weight gain causes)
+    mother_n : int, optional
+        Sample size for mother cohort (all patients)
     """
     # Sort variables based on preference
     if preserve_order:
@@ -262,9 +267,16 @@ def create_lollipop_plot(data: pd.DataFrame, output_path: str = None,
     # Customize the plot
     ax.set_yticks(y_positions)
     ax.set_yticklabels(data_sorted['variable'], fontsize=10)
-    ax.set_xlabel('Percent Difference (%)', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Clinical Metrics', fontsize=12, fontweight='bold')
-    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    ax.set_xlabel('Percent change: relative differences among WGC patients compared with all patients', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Clinical characteristics, adherence and outcomes', fontsize=12, fontweight='bold')
+    
+    # Create dynamic title with sample sizes if provided
+    if wgc_n is not None and mother_n is not None:
+        full_title = f"Key clinical differences between patients with (n = {wgc_n}) and without (n = {mother_n - wgc_n}) reported weight gain causes"
+    else:
+        full_title = title
+    
+    ax.set_title(full_title, fontsize=14, fontweight='bold', pad=20)
     
     # Add reference line at 0%
     ax.axvline(x=0, color='black', linestyle='-', linewidth=1, alpha=0.8)
@@ -327,7 +339,7 @@ def generate_summary_table(data: pd.DataFrame) -> pd.DataFrame:
 
 def main(db_path: str, table_name: str, output_plot_path: str = None, 
          output_table_path: str = None, variables_to_include: List[str] = None,
-         title: str = "Percent Difference: WGC vs All Patients",
+         title: str = "Key clinical differences between patients with and without reported weight gain causes",
          figsize: Tuple[int, int] = (10, 8), preserve_order: bool = False):
     """
     Main function to generate WGC vs Mother cohort lollipop plot.
@@ -358,6 +370,19 @@ def main(db_path: str, table_name: str, output_plot_path: str = None,
     print("Extracting comparison data...")
     df = extract_comparison_data(db_path, table_name)
     
+    # Extract sample sizes from the 'N' row if available
+    wgc_n = None
+    mother_n = None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            n_df = pd.read_sql_query(f"SELECT * FROM {table_name} WHERE Variable = 'N'", conn)
+            if not n_df.empty:
+                mother_n = int(n_df['Parent cohort'].iloc[0]) if pd.notna(n_df['Parent cohort'].iloc[0]) else None
+                wgc_n = int(n_df['Observed cohort'].iloc[0]) if pd.notna(n_df['Observed cohort'].iloc[0]) else None
+                print(f"Sample sizes - WGC cohort: {wgc_n}, Mother cohort: {mother_n}")
+    except Exception as e:
+        print(f"Could not extract sample sizes: {e}")
+    
     print("Calculating percentage changes...")
     pct_data = calculate_percentage_changes(df)
     
@@ -386,7 +411,7 @@ def main(db_path: str, table_name: str, output_plot_path: str = None,
     
     # Create the plot
     print("Creating lollipop plot...")
-    create_lollipop_plot(pct_data, output_plot_path, title, figsize, preserve_order)
+    create_lollipop_plot(pct_data, output_plot_path, title, figsize, preserve_order, wgc_n, mother_n)
     
     # Generate summary table
     print("Generating summary table...")
@@ -403,7 +428,7 @@ def create_lollipop_from_raw_data(input_db_path: str, mother_cohort_table: str,
                                  wgc_cohort_table: str, output_plot_path: str = None,
                                  output_table_path: str = None, 
                                  variables_to_include: List[str] = None,
-                                 title: str = "Percent Difference: WGC vs All Patients",
+                                 title: str = "Key clinical differences between patients with and without reported weight gain causes",
                                  figsize: Tuple[int, int] = (10, 8),
                                  preserve_order: bool = False):
     """
@@ -450,9 +475,11 @@ def create_lollipop_from_raw_data(input_db_path: str, mother_cohort_table: str,
     for _, row in pct_data.iterrows():
         print(f"  {row['variable']}: {row['percent_change']:+.1f}% {row['significance']}")
     
-    # Create the plot
+    # Create the plot with sample sizes
+    wgc_n = len(df_wgc)
+    mother_n = len(df_mother)
     print("Creating lollipop plot...")
-    create_lollipop_plot(pct_data, output_plot_path, title, figsize, preserve_order)
+    create_lollipop_plot(pct_data, output_plot_path, title, figsize, preserve_order, wgc_n, mother_n)
     
     # Generate summary table
     print("Generating summary table...")
