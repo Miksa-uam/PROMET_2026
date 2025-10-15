@@ -697,12 +697,12 @@ class RandomForestAnalyzer:
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['shap_bar'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=8, ha='right')  # Smaller font, right-aligned
-            ax.set_xlabel('Mean Absolute SHAP Value', fontsize=10)
-            ax.set_title('Mean Absolute SHAP Values', fontsize=11, fontweight='bold')
+            ax.set_yticklabels(nice_labels, fontsize=12, ha='right')  # INCREASED: Better readability
+            ax.set_xlabel('Mean Absolute SHAP Value', fontsize=12)  # INCREASED: Better readability
+            ax.set_title('Mean Absolute SHAP Values', fontsize=14, fontweight='bold')  # INCREASED: Match primary
             ax.grid(True, alpha=0.3)
             ax.set_axisbelow(True)
-            ax.margins(y=0.01)  # Tighter vertical margins
+            ax.margins(y=0.02)  # INCREASED: More generous spacing like primary
             
         except Exception as e:
             logger.error(f"Failed to create mean SHAP panel: {str(e)}")
@@ -723,12 +723,12 @@ class RandomForestAnalyzer:
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['permutation'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=8, ha='right')  # Smaller font, right-aligned
-            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=10)
-            ax.set_title('Permutation Feature Importance', fontsize=11, fontweight='bold')
+            ax.set_yticklabels(nice_labels, fontsize=12, ha='right')  # INCREASED: Better readability
+            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=12)  # INCREASED: Better readability
+            ax.set_title('Permutation Feature Importance', fontsize=14, fontweight='bold')  # INCREASED: Match primary
             ax.grid(True, alpha=0.3)
             ax.set_axisbelow(True)
-            ax.margins(y=0.01)  # Tighter vertical margins
+            ax.margins(y=0.02)  # INCREASED: More generous spacing like primary
             
         except Exception as e:
             logger.error(f"Failed to create permutation importance panel: {str(e)}")
@@ -736,14 +736,20 @@ class RandomForestAnalyzer:
 
     def _calculate_figure_dimensions(self, n_features: int, plot_type: str = 'primary') -> Tuple[float, float]:
         """Calculate optimal figure dimensions based on number of features."""
-        # FORCE IDENTICAL LARGE DIMENSIONS for both plots
-        # Use the dimensions that clearly work well for the secondary plot
-        forced_width = 24.0  # Large width that works
-        forced_height = max(16.0, n_features * 0.6 + 4)  # Dynamic height with generous spacing
-        forced_height = min(forced_height, 24.0)  # Reasonable max
+        # OPTIMIZED DIMENSIONS: Ensure both plots have excellent readability
+        if plot_type == 'primary':
+            # Primary plot dimensions (already working well)
+            width = 24.0
+            height = max(16.0, n_features * 0.6 + 4)
+        else:
+            # Secondary plot: ENHANCED dimensions for better readability to match primary
+            width = 26.0  # SLIGHTLY WIDER: More space for two detailed bar charts
+            height = max(18.0, n_features * 0.7 + 5)  # TALLER: More generous spacing for readability
         
-        print(f"DEBUG DIMENSIONS: {plot_type} plot - FORCED width: {forced_width}, height: {forced_height}, n_features: {n_features}")
-        return forced_width, forced_height
+        height = min(height, 26.0)  # Reasonable maximum
+        
+        print(f"DEBUG DIMENSIONS: {plot_type} plot - width: {width}, height: {height}, n_features: {n_features}")
+        return width, height
 
     def _plot_primary_composite(self):
         """Create primary composite plot: Gini importance + SHAP beeswarm."""
@@ -798,15 +804,15 @@ class RandomForestAnalyzer:
             plt.style.use('seaborn-v0_8-whitegrid')
             fig, (ax_shap, ax_perm) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
             fig.suptitle(f'Additional Feature Importance Metrics: {self.config.analysis_name}', 
-                        fontsize=14, fontweight='bold', y=0.98)
+                        fontsize=16, fontweight='bold', y=0.96)  # INCREASED: Match primary plot title prominence
             
             # Create panels
             self._create_mean_shap_panel(ax_shap, shap_explanation)
             self._create_permutation_importance_panel(ax_perm, permutation_importance)
             
-            # Save and show
+            # Adjust layout to match primary plot's superior spacing
             plt.tight_layout()
-            plt.subplots_adjust(top=0.93)
+            plt.subplots_adjust(top=0.90, left=0.15, right=0.95, bottom=0.10)  # ENHANCED: Match primary plot margins
             output_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_secondary_FI_composite.png")
             plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
             print(f"Secondary composite plot saved to: {output_path}")
