@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
+from typing import List, Dict, Tuple
 from scipy.stats import ttest_ind, chi2_contingency
 from paper12_config import descriptive_comparisons_config, master_config
 from fdr_correction_utils import collect_pvalues_from_dataframe, apply_fdr_correction, integrate_corrected_pvalues
@@ -469,6 +470,84 @@ def wgc_stratification(df, config: descriptive_comparisons_config, conn):
     summary_df.to_sql(config.wgc_output_table, conn, if_exists="replace", index=False)
     print(f"Weight gain cause stratification table saved to {config.wgc_output_table}")
 
+def wgc_vs_population_mean_analysis(df, config: descriptive_comparisons_config, conn):
+    """Performs WGC vs population mean analysis comparing each WGC group against population baseline."""
+    if not hasattr(config, 'wgc_vs_mean_output_table') or not config.wgc_vs_mean_output_table:
+        return  # Skip if not configured
+    
+    print("Running WGC vs Population Mean Analysis...")
+    row_order = config.row_order
+    cause_cols = get_cause_cols(row_order)
+    var_types = get_variable_types(df, cause_cols)
+
+    # Reuse WGC group extraction logic from wgc_stratification
+    groups = {}
+    wgc_labels = []
+    for cause in cause_cols:
+        pretty_cause = next((p for v, p in row_order if v == cause), cause).replace(" (yes/no)", "")
+        wgc_group = df[df[cause] == 1]
+        groups[pretty_cause] = wgc_group
+        wgc_labels.append(pretty_cause)
+
+    summary_rows = []
+    
+    # N row
+    n_row = {"Variable": "N", "Population Mean (±SD) or N (%)": len(df)}
+    for wgc_label in wgc_labels:
+        n_row[f"{wgc_label}: Mean/N"] = len(groups[wgc_label])
+        n_row[f"{wgc_label}: p-value"] = "N/A"
+        if config.fdr_correction:
+            n_row[f"{wgc_label}: p-value (FDR-corrected)"] = "N/A"
+    summary_rows.append(n_row)
+
+    # Process each variable
+    for i, (var, _) in enumerate(row_order):
+        if var == "N" or var.startswith("delim_"):
+            continue
+        print(f"  Processing variable {i}/{len(row_order)}: {var}")
+
+        vtype = var_types.get(var, "continuous")
+        row = {"Variable": var}
+        
+        # Population statistics
+        row["Population Mean (±SD) or N (%)"] = format_value(df, var, vtype)
+        
+        # Compare each WGC group vs population
+        for wgc_label in wgc_labels:
+            wgc_group = groups[wgc_label]
+            row[f"{wgc_label}: Mean/N"] = format_value(wgc_group, var, vtype)
+            row[f"{wgc_label}: p-value"] = perform_comparison(df, wgc_group, var, vtype)  # Population vs WGC group
+            if config.fdr_correction:
+                row[f"{wgc_label}: p-value (FDR-corrected)"] = row[f"{wgc_label}: p-value"]  # Will be corrected later
+        
+        summary_rows.append(row)
+
+    summary_rows = add_empty_rows_and_pretty_names(summary_rows, row_order)
+    summary_df = pd.DataFrame(summary_rows)
+    
+    # Apply FDR correction if enabled
+    if config.fdr_correction:
+        try:
+            print("Applying FDR correction to WGC vs population mean p-values...")
+            pvalue_columns = [f"{wgc_label}: p-value" for wgc_label in wgc_labels]
+            pvalue_dict = collect_pvalues_from_dataframe(summary_df, pvalue_columns)
+            
+            corrections = {}
+            for col, pvals in pvalue_dict.items():
+                try:
+                    corrections[col] = apply_fdr_correction(pvals)
+                except Exception as e:
+                    corrections[col] = pvals  # Fallback to original p-values
+            
+            summary_df = integrate_corrected_pvalues(summary_df, corrections, " (FDR-corrected)")
+            print(f"FDR correction applied to {len(pvalue_columns)} WGC vs population p-value columns")
+            
+        except Exception as e:
+            print(f"Error: FDR correction failed. Continuing with original p-values.")
+    
+    summary_df.to_sql(config.wgc_vs_mean_output_table, conn, if_exists="replace", index=False)
+    print(f"WGC vs population mean analysis table saved to {config.wgc_vs_mean_output_table}")
+
 # =========================
 # 4. MAIN PIPELINE
 # =========================
@@ -540,6 +619,15 @@ def run_descriptive_comparisons(master_config: master_config):
                         analysis_config,  # This contains the fdr_correction parameter
                         conn_out
                     )
+                    
+                    # Run WGC vs population mean analysis if configured
+                    if hasattr(analysis_config, 'wgc_vs_mean_output_table') and analysis_config.wgc_vs_mean_output_table:
+                        logger.info(f"Running WGC vs population mean analysis with FDR correction: {fdr_enabled}")
+                        wgc_vs_population_mean_analysis(
+                            df_input,
+                            analysis_config,  # This contains the fdr_correction parameter
+                            conn_out
+                        )
                 
                 logger.info(f"Completed analysis: {analysis_config.analysis_name}")
                 print(f"  Analysis '{analysis_config.analysis_name}' completed successfully")
