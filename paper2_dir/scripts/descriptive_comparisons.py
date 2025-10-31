@@ -25,7 +25,7 @@ def format_mean_sd(series):
         return "N/A"
     mean = series.mean()
     sd = series.std()
-    return f"{mean:.2f} ± {sd:.2f}"
+    return f"{mean:.2f} \u00B1 {sd:.2f}"
 
 def format_n_perc(series):
     """Formats a binary categorical series into 'N (%)' for the positive class (1)."""
@@ -565,7 +565,104 @@ def wgc_vs_population_mean_analysis(df, config: descriptive_comparisons_config, 
     print(f"WGC vs population mean analysis table saved to {config.wgc_vs_mean_output_table}")
 
 # =========================
-# 4. MAIN PIPELINE
+# 4. TABLE FORMATTING FUNCTIONS
+# =========================
+
+def add_fdr_corrected_pvalues_to_table(summary_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applies FDR correction using the fdr_correction_utils module and
+    integrates the results back into the DataFrame.
+    """
+    pvalue_columns = [col for col in summary_df.columns if col.endswith(': p-value')]
+    if not pvalue_columns:
+        return summary_df
+
+    pvalue_dict = collect_pvalues_from_dataframe(summary_df, pvalue_columns)
+    
+    corrections = {}
+    for col, pvals in pvalue_dict.items():
+        corrections[col] = apply_fdr_correction(pvals)
+        
+    df_corrected = integrate_corrected_pvalues(summary_df, corrections)
+    
+    return df_corrected
+
+def create_publication_table(summary_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Creates a publication-friendly table with significance markers.
+    This function is now robust as it relies on the correctly ordered input DataFrame.
+    """
+    pub_df = summary_df.copy()
+    p_value_cols_to_remove = [col for col in pub_df.columns if ': p-value' in col]
+
+    for data_col_name in [c for c in pub_df.columns if c.startswith('Cluster_') and ': p-value' not in c]:
+        raw_p_col = f"{data_col_name}: p-value"
+        fdr_p_col = f"{data_col_name}: p-value (FDR-corrected)"
+
+        if raw_p_col in pub_df.columns and fdr_p_col in pub_df.columns:
+            def apply_significance(row):
+                val, raw_p, fdr_p = row[data_col_name], pd.to_numeric(row[raw_p_col], errors='coerce'), pd.to_numeric(row[fdr_p_col], errors='coerce')
+                marker = '**' if pd.notna(fdr_p) and fdr_p < 0.05 else '*' if pd.notna(raw_p) and raw_p < 0.05 else ''
+                return f"{val}{marker}"
+            pub_df[data_col_name] = pub_df.apply(apply_significance, axis=1)
+
+    pub_df.drop(columns=p_value_cols_to_remove, inplace=True, errors='ignore')
+    return pub_df
+    
+def generate_comparison_tables_with_fdr_and_publication(df, df_mother, config, conn, table_type="demographic"):
+    """
+    Generate both detailed (with p-values) and publication-friendly comparison tables.
+    Args:
+        df, df_mother: DataFrames for comparison
+        config: Analysis configuration
+        conn: Database connection
+        table_type: "demographic" or "wgc" to determine which analysis to run
+    Returns:
+        Tuple of (detailed_df, publication_df)
+    """
+    if table_type == "demographic":
+        # Run demographic stratification to get base table
+        demographic_stratification(df, df_mother, config, conn)
+        # Load the saved table
+        table_name = config.demographic_output_table
+    elif table_type == "wgc":
+        # Run WGC stratification to get base table
+        wgc_stratification(df, config, conn)
+        # Load the saved table
+        table_name = config.wgc_output_table
+    else:
+        raise ValueError("table_type must be 'demographic' or 'wgc'")
+    
+    # Load the base table
+    base_df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+    
+    # Add FDR-corrected p-values
+    detailed_df = add_fdr_corrected_pvalues_to_table(base_df)
+    
+    # Save detailed table (with both raw and FDR p-values)
+    detailed_table_name = f"{table_name}_with_fdr"
+    detailed_df.to_sql(detailed_table_name, conn, if_exists="replace", index=False)
+    print(f"Detailed table saved to: {detailed_table_name}")
+    
+    # Create publication-friendly table
+    pub_df = create_publication_table(detailed_df)
+    
+    # Save publication table
+    pub_table_name = f"{table_name}_publication"
+    pub_df.to_sql(pub_table_name, conn, if_exists="replace", index=False)
+    print(f"Publication table saved to: {pub_table_name}")
+    
+    # Display both tables
+    print(f"\n=== DETAILED TABLE ({detailed_table_name}) ===")
+    print(detailed_df.to_string(index=False))
+    
+    print(f"\n=== PUBLICATION TABLE ({pub_table_name}) ===")
+    print(pub_df.to_string(index=False))
+    
+    return detailed_df, pub_df
+
+# =========================
+# 5. MAIN PIPELINE
 # =========================
 
 def run_descriptive_comparisons(master_config: master_config):

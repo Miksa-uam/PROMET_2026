@@ -166,106 +166,37 @@ def collect_pvalues_from_dataframe(
 def integrate_corrected_pvalues(
     df: pd.DataFrame, 
     corrections: Dict[str, List[float]], 
-    suffix: str = " (FDR-corrected)"
+    suffix: str = '(FDR-corrected)'
 ) -> pd.DataFrame:
     """
-    Add FDR-corrected p-value columns to DataFrame immediately after their corresponding raw columns.
-    
-    This function inserts corrected p-value columns right after their raw counterparts,
-    making it easier to compare raw vs. corrected values in the output tables.
-    
-    Args:
-        df (pd.DataFrame): Original DataFrame to add corrected columns to
-        corrections (Dict[str, List[float]]): Dictionary mapping original column 
-                                            names to corrected p-values
-        suffix (str, optional): Suffix to append to original column names for 
-                               corrected columns. Defaults to " (FDR-corrected)".
-    
-    Returns:
-        pd.DataFrame: DataFrame with corrected p-value columns inserted immediately 
-                     after their corresponding raw columns
-    
-    Examples:
-        >>> # Before: ['Variable', 'Group1', 'Group2', 'Age: p-value', 'Sex: p-value']
-        >>> df_corrected = integrate_corrected_pvalues(df, corrections)
-        >>> # After: ['Variable', 'Group1', 'Group2', 'Age: p-value', 'Age: p-value (FDR-corrected)', 'Sex: p-value', 'Sex: p-value (FDR-corrected)']
+    FINALIZED: Integrates FDR-corrected p-values back into the DataFrame,
+    and correctly interleaves the new columns next to the original p-value columns.
     """
-    df_result = df.copy()
+    df_copy = df.copy()
     
-    # Keep track of columns we've processed to avoid duplicates
-    processed_columns = set()
-    
-    # Process corrections in the order they appear in the original DataFrame
-    original_columns = list(df_result.columns)
-    
-    for original_col in original_columns:
-        if original_col in corrections and original_col not in processed_columns:
-            corrected_vals = corrections[original_col]
-            corrected_col = original_col + suffix
-            
-            try:
-                # Ensure corrected values list matches DataFrame length
-                if len(corrected_vals) != len(df_result):
-                    logger.warning(
-                        f"Length mismatch for column '{original_col}': "
-                        f"DataFrame has {len(df_result)} rows, "
-                        f"corrected values has {len(corrected_vals)} values. "
-                        f"Skipping integration."
-                    )
-                    continue
-                
-                # Find the position of the original column
-                original_col_idx = df_result.columns.get_loc(original_col)
-                
-                # Insert the corrected column right after the original column
-                # First, add the corrected column to the end
-                df_result[corrected_col] = corrected_vals
-                
-                # Then reorder columns to put the corrected column right after the original
-                cols = list(df_result.columns)
-                
-                # Remove the corrected column from its current position (end)
-                cols.remove(corrected_col)
-                
-                # Insert it right after the original column
-                cols.insert(original_col_idx + 1, corrected_col)
-                
-                # Reorder the DataFrame
-                df_result = df_result[cols]
-                
-                processed_columns.add(original_col)
-                logger.debug(f"Added corrected p-value column '{corrected_col}' after '{original_col}'")
-                
-            except Exception as e:
-                logger.error(f"Failed to integrate corrected p-values for column '{original_col}': {str(e)}")
-    
-    # Handle any remaining corrections that weren't in the original column order
-    for original_col, corrected_vals in corrections.items():
-        if original_col not in processed_columns:
-            corrected_col = original_col + suffix
-            
-            try:
-                if len(corrected_vals) != len(df_result):
-                    logger.warning(
-                        f"Length mismatch for column '{original_col}': "
-                        f"DataFrame has {len(df_result)} rows, "
-                        f"corrected values has {len(corrected_vals)} values. "
-                        f"Skipping integration."
-                    )
-                    continue
-                
-                # If original column doesn't exist, just add to the end
-                df_result[corrected_col] = corrected_vals
-                logger.debug(f"Added corrected p-value column '{corrected_col}' at end (original column not found)")
-                
-            except Exception as e:
-                logger.error(f"Failed to integrate corrected p-values for column '{original_col}': {str(e)}")
-    
-    added_cols = len([col for col in df_result.columns if suffix in col])
-    logger.info(f"Integrated {added_cols} FDR-corrected p-value columns adjacent to their raw counterparts")
-    
-    return df_result
+    # First, add all the new FDR columns to the DataFrame copy
+    for original_col, corrected_pvals in corrections.items():
+        fdr_col_name = f"{original_col} {suffix}"
+        # Ensure the length matches the DataFrame index
+        if len(corrected_pvals) == len(df_copy):
+            df_copy[fdr_col_name] = [f"{p:.4f}" if pd.notna(p) else "N/A" for p in corrected_pvals]
+        else:
+            print(f"Warning: Length mismatch for column {original_col}. Skipping integration.")
 
+    # Now, determine the final, interleaved column order
+    new_order = []
+    for col in df.columns:
+        new_order.append(col)
+        # If the current column is a p-value column, add its FDR version right after
+        if col in corrections:
+            fdr_col_name = f"{col} {suffix}"
+            if fdr_col_name in df_copy.columns:
+                new_order.append(fdr_col_name)
+
+    # Ensure all new columns are included, even if logic missed something
+    final_ordered_columns = new_order + [c for c in df_copy.columns if c not in new_order]
+    
+    return df_copy[final_ordered_columns]
 
 def format_pvalue_for_output(
     p_value: float, 
@@ -314,3 +245,88 @@ def format_pvalue_for_output(
             
     except (ValueError, TypeError):
         return 'N/A'
+
+
+def add_fdr_corrected_pvalues_to_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply FDR correction to all p-value columns in a comparison table.
+    
+    This function identifies p-value columns (those ending with ': p-value'),
+    applies FDR correction, and adds corrected columns adjacent to raw ones.
+    
+    Args:
+        df (pd.DataFrame): DataFrame with p-value columns to correct
+    
+    Returns:
+        pd.DataFrame: DataFrame with FDR-corrected p-value columns added
+    """
+    # Identify p-value columns
+    pvalue_columns = [col for col in df.columns if col.endswith(': p-value')]
+    
+    if not pvalue_columns:
+        logger.warning("No p-value columns found for FDR correction")
+        return df.copy()
+    
+    # Collect p-values
+    pvalue_dict = collect_pvalues_from_dataframe(df, pvalue_columns)
+    
+    # Apply FDR correction to each column
+    corrections = {}
+    for col, pvals in pvalue_dict.items():
+        corrected_pvals = apply_fdr_correction(pvals)
+        corrections[col] = corrected_pvals
+    
+    # Integrate corrected p-values
+    df_corrected = integrate_corrected_pvalues(df, corrections)
+    
+    return df_corrected
+
+
+def create_publication_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create a publication-ready table with significance markers.
+    
+    This function takes a DataFrame with raw and FDR-corrected p-values
+    and creates a clean table with significance markers (* and **).
+    
+    Args:
+        df (pd.DataFrame): DataFrame with raw and corrected p-value columns
+    
+    Returns:
+        pd.DataFrame: Publication-ready table with significance markers
+    """
+    pub_df = df.copy()
+    
+    # Find all p-value column pairs (raw and corrected)
+    raw_pval_cols = [col for col in df.columns if col.endswith(': p-value')]
+    corrected_pval_cols = [col for col in df.columns if col.endswith(': p-value (FDR-corrected)')]
+    
+    # Create significance markers for each column
+    for raw_col in raw_pval_cols:
+        corrected_col = raw_col + ' (FDR-corrected)'
+        
+        if corrected_col in corrected_pval_cols:
+            # Create significance column
+            sig_col = raw_col.replace(': p-value', '')
+            
+            # Add significance markers to the main value column
+            if sig_col in pub_df.columns:
+                for idx in pub_df.index:
+                    raw_p = pd.to_numeric(pub_df.loc[idx, raw_col], errors='coerce')
+                    corrected_p = pd.to_numeric(pub_df.loc[idx, corrected_col], errors='coerce')
+                    
+                    significance = ''
+                    if not pd.isna(corrected_p) and corrected_p < 0.05:
+                        significance = '**'  # FDR-corrected significant
+                    elif not pd.isna(raw_p) and raw_p < 0.05:
+                        significance = '*'   # Raw significant only
+                    
+                    if significance:
+                        current_val = str(pub_df.loc[idx, sig_col])
+                        pub_df.loc[idx, sig_col] = current_val + significance
+    
+    # Remove p-value columns from publication table
+    cols_to_remove = raw_pval_cols + corrected_pval_cols
+    pub_df = pub_df.drop(columns=cols_to_remove, errors='ignore')
+    
+    return pub_df

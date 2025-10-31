@@ -1,513 +1,257 @@
-"""
-Descriptive Visualizations Swiss Army Knife
+# =============================================================================
+# MODULE: DESCRIPTIVE_VISUALIZATIONS.PY
+# VERSION: 4.0 (Corrected & Finalized)
+#
+# DESCRIPTION:
+# A final, corrected version of the generalized visualization toolkit. This
+# version specifically fixes issues with split-violin and stacked-bar plots
+# to match user requirements and reference images.
+# =============================================================================
 
-Clean, general-purpose visualization engines for population comparisons.
-Each function takes clean data and produces publication-ready plots.
-
-Functions:
-- create_lollipop_plot: Percent change comparisons between cohorts
-- create_forest_plot: Risk ratios/differences for binary outcomes  
-- create_split_violin_plot: Distribution comparisons for continuous variables
-- create_stacked_bar_plot: Binary variable distributions across groups
-"""
-
+import os
+import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import chi2_contingency, fisher_exact, ttest_ind
-from typing import List, Tuple, Optional
-import warnings
-warnings.filterwarnings('ignore')
+from typing import Dict, List, Optional, Any
+
+# --- CONFIGURATION & SETUP ---
+DEFAULT_PALETTE = sns.color_palette("husl", 12)
+POPULATION_COLOR = 'lightgrey'
+ACHIEVED_COLOR = '#66B2FF'
+NOT_ACHIEVED_COLOR = '#FF9999'
+
+
+# --- HELPER FUNCTIONS (Unchanged) ---
+def load_name_map(json_path: str) -> Dict[str, str]:
+    if not os.path.exists(json_path):
+        print(f"⚠️ Warning: Name map file not found at '{json_path}'.")
+        return {}
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ Warning: Failed to load name map file '{json_path}'. Error: {e}")
+        return {}
+
+def get_nice_name(variable: str, name_map: Dict[str, str]) -> str:
+    return name_map.get(variable, variable.replace('_', ' ').title())
+
+def _annotate_significance(ax: plt.Axes, x: float, y: float, p_raw: Optional[float], p_fdr: Optional[float], alpha: float):
+    text = ''
+    if p_fdr is not None and p_fdr < alpha:
+        text = '**'
+    elif p_raw is not None and p_raw < alpha:
+        text = '*'
+    if text:
+        ax.text(x, y, text, ha='center', va='bottom', fontsize=20, color='black', weight='bold')
 
 # =============================================================================
-# UTILITY FUNCTIONS
+# CORE VISUALIZATION FUNCTIONS (CORRECTED)
 # =============================================================================
 
-def _apply_plot_styling() -> None:
-    """Apply consistent publication-ready styling."""
-    plt.style.use('seaborn-v0_8-whitegrid')
-    plt.rcParams.update({
-        'font.size': 10,
-        'axes.titlesize': 14,
-        'axes.labelsize': 12,
-        'xtick.labelsize': 10,
-        'ytick.labelsize': 10,
-        'legend.fontsize': 10,
-        'figure.titlesize': 16
-    })
-
-def _calculate_percent_change(ref_val: float, comp_val: float) -> float:
-    """Calculate percent change: ((comp - ref) / ref) * 100"""
-    if pd.isna(ref_val) or pd.isna(comp_val) or ref_val == 0:
-        return np.nan
-    return ((comp_val - ref_val) / ref_val) * 100
-
-def _calculate_risk_ratio(data: pd.DataFrame, outcome_col: str, group_col: str) -> Tuple[float, float, float]:
-    """Calculate risk ratio with 95% CI."""
-    # Create 2x2 contingency table
-    exposed = data[data[group_col] == 1]
-    unexposed = data[data[group_col] == 0]
-    
-    a = len(exposed[exposed[outcome_col] == 1])  # events in exposed
-    b = len(exposed[exposed[outcome_col] == 0])  # non-events in exposed  
-    c = len(unexposed[unexposed[outcome_col] == 1])  # events in unexposed
-    d = len(unexposed[unexposed[outcome_col] == 0])  # non-events in unexposed
-    
-    if a == 0 or b == 0 or c == 0 or d == 0:
-        # Add continuity correction
-        a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
-    
-    risk_exposed = a / (a + b)
-    risk_unexposed = c / (c + d)
-    
-    if risk_unexposed == 0:
-        return np.inf, np.inf, np.inf
-    
-    rr = risk_exposed / risk_unexposed
-    
-    # Calculate 95% CI using log transformation
-    se_log_rr = np.sqrt((1/a) - (1/(a+b)) + (1/c) - (1/(c+d)))
-    log_rr = np.log(rr)
-    
-    ci_lower = np.exp(log_rr - 1.96 * se_log_rr)
-    ci_upper = np.exp(log_rr + 1.96 * se_log_rr)
-    
-    return rr, ci_lower, ci_upper
-
-def _calculate_risk_difference(data: pd.DataFrame, outcome_col: str, group_col: str) -> Tuple[float, float, float]:
-    """Calculate risk difference with 95% CI."""
-    exposed = data[data[group_col] == 1]
-    unexposed = data[data[group_col] == 0]
-    
-    a = len(exposed[exposed[outcome_col] == 1])
-    b = len(exposed[exposed[outcome_col] == 0])
-    c = len(unexposed[unexposed[outcome_col] == 1])
-    d = len(unexposed[unexposed[outcome_col] == 0])
-    
-    if a == 0 or b == 0 or c == 0 or d == 0:
-        a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
-    
-    risk_exposed = a / (a + b)
-    risk_unexposed = c / (c + d)
-    rd = risk_exposed - risk_unexposed
-    
-    # Calculate 95% CI
-    se_rd = np.sqrt((a*b)/((a+b)**3) + (c*d)/((c+d)**3))
-    ci_lower = rd - 1.96 * se_rd
-    ci_upper = rd + 1.96 * se_rd
-    
-    return rd, ci_lower, ci_upper
-
-# =============================================================================
-# VISUALIZATION FUNCTIONS  
-# =============================================================================
-
-def create_lollipop_plot(
-    reference_data: pd.DataFrame,
-    comparison_data: pd.DataFrame, 
-    variables: List[str],
-    output_path: str = None,
-    title: str = None,
-    reference_label: str = "Reference",
-    comparison_label: str = "Comparison",
-    figsize: Tuple[int, int] = (10, 8)
-) -> plt.Figure:
-    """
-    Create lollipop plot showing percent change between two cohorts.
-    
-    Args:
-        reference_data: DataFrame with reference cohort (denominator for % change)
-        comparison_data: DataFrame with comparison cohort 
-        variables: List of column names to compare
-        output_path: Optional path to save plot
-        title: Plot title
-        reference_label: Label for reference group
-        comparison_label: Label for comparison group
-        figsize: Figure size (width, height)
-    
-    Returns:
-        matplotlib Figure object
-    """
-    _apply_plot_styling()
-    
-    # Calculate percent changes
-    results = []
-    for var in variables:
-        if var not in reference_data.columns or var not in comparison_data.columns:
-            continue
-            
-        ref_val = reference_data[var].mean()
-        comp_val = comparison_data[var].mean()
-        pct_change = _calculate_percent_change(ref_val, comp_val)
-        
-        if not pd.isna(pct_change):
-            results.append({'variable': var, 'percent_change': pct_change})
-    
-    if not results:
-        raise ValueError("No valid comparisons found for the given variables")
-    
-    df_results = pd.DataFrame(results)
-    df_results = df_results.sort_values('percent_change', key=abs)
-    
-    # Create plot
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    y_positions = range(len(df_results))
-    
-    # Plot lollipops
-    for i, (_, row) in enumerate(df_results.iterrows()):
-        ax.plot([0, row['percent_change']], [i, i], 'o-', 
-                color='steelblue', linewidth=2, markersize=8, alpha=0.7)
-    
-    # Customize plot
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(df_results['variable'])
-    ax.set_xlabel(f'Percent change: {comparison_label} vs {reference_label}')
-    ax.set_ylabel('Variables')
-    
-    if title:
-        ax.set_title(title)
-    
-    # Add reference line at 0%
-    ax.axvline(x=0, color='black', linestyle='-', linewidth=1, alpha=0.8)
-    ax.grid(True, axis='x', alpha=0.3)
-    
-    plt.tight_layout()
-    
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    
-    return fig
-
-def create_forest_plot(
-    data: pd.DataFrame,
-    outcome_col: str,
-    group_col: str,
-    effect_type: str = "risk_ratio",
-    output_path: str = None,
-    title: str = None,
-    figsize: Tuple[int, int] = (10, 6)
-) -> plt.Figure:
-    """
-    Create forest plot showing risk ratios or risk differences.
-    
-    Args:
-        data: DataFrame with outcome and grouping variables
-        outcome_col: Binary outcome column name (0/1)
-        group_col: Binary grouping column name (0/1) 
-        effect_type: "risk_ratio" or "risk_difference"
-        output_path: Optional path to save plot
-        title: Plot title
-        figsize: Figure size (width, height)
-    
-    Returns:
-        matplotlib Figure object
-    """
-    _apply_plot_styling()
-    
-    # Calculate effect size
-    if effect_type == "risk_ratio":
-        effect, ci_lower, ci_upper = _calculate_risk_ratio(data, outcome_col, group_col)
-        reference_value = 1.0
-        x_label = "Risk Ratio"
-        use_log_scale = True
-    elif effect_type == "risk_difference":
-        effect, ci_lower, ci_upper = _calculate_risk_difference(data, outcome_col, group_col)
-        reference_value = 0.0
-        x_label = "Risk Difference"
-        use_log_scale = False
-    else:
-        raise ValueError("effect_type must be 'risk_ratio' or 'risk_difference'")
-    
-    # Create plot
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    # Plot point and error bars
-    ax.errorbar([effect], [0], xerr=[[effect - ci_lower], [ci_upper - effect]], 
-                fmt='o', markersize=10, capsize=8, capthick=2, 
-                color='steelblue', markerfacecolor='steelblue')
-    
-    # Add reference line
-    ax.axvline(x=reference_value, color='red', linestyle='--', linewidth=2, alpha=0.8)
-    
-    # Customize plot
-    ax.set_xlabel(x_label)
-    ax.set_yticks([])
-    ax.set_ylim(-0.5, 0.5)
-    
-    if use_log_scale and effect > 0 and ci_lower > 0:
-        ax.set_xscale('log')
-    
-    if title:
-        ax.set_title(title)
-    
-    # Add effect size text
-    if effect_type == "risk_ratio":
-        effect_text = f"RR = {effect:.2f} (95% CI: {ci_lower:.2f}-{ci_upper:.2f})"
-    else:
-        effect_text = f"RD = {effect:.3f} (95% CI: {ci_lower:.3f}-{ci_upper:.3f})"
-    
-    ax.text(0.02, 0.98, effect_text, transform=ax.transAxes, 
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    
-    return fig
-
-def create_split_violin_plot(
-    data: pd.DataFrame,
+def plot_distribution_comparison(
+    df: pd.DataFrame,
+    population_df: pd.DataFrame,
     variable: str,
-    group_cols: List[str],
-    output_path: str = None,
-    title: str = None,
-    group_labels: List[str] = None,
-    p_values: List[float] = None,
-    figsize: Tuple[int, int] = None
-) -> plt.Figure:
+    group_col: str,
+    output_filename: str,
+    name_map_path: str,
+    output_dir: str,
+    significance_map_raw: Optional[Dict[Any, float]] = None,
+    significance_map_fdr: Optional[Dict[Any, float]] = None,
+    alpha: float = 0.05
+):
     """
-    Create split violin plot comparing distributions across multiple binary groups.
-    
-    Args:
-        data: DataFrame with continuous variable and grouping columns
-        variable: Continuous variable column name
-        group_cols: List of binary grouping column names (0/1)
-        output_path: Optional path to save plot  
-        title: Plot title
-        group_labels: Labels for the groups (if None, uses column names)
-        p_values: Optional list of p-values for significance testing (same order as group_cols)
-        figsize: Figure size (width, height) - auto-calculated if None
-    
-    Returns:
-        matplotlib Figure object
+    CORRECTED: Creates a true split-violin plot comparing each group's distribution
+    to the total population's distribution.
     """
-    _apply_plot_styling()
-    
-    # Auto-calculate figure size based on number of groups
-    if figsize is None:
-        width = max(8, len(group_cols) * 1.5)
-        figsize = (width, 6)
-    
-    # Prepare data for plotting
+    os.makedirs(output_dir, exist_ok=True)
+    name_map = load_name_map(name_map_path)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    groups = sorted(df[group_col].unique())
+    n_groups = len(groups)
+    fig, ax = plt.subplots(figsize=(max(12, n_groups * 2), 8))
+
+    # --- Data Preparation for Split Violin ---
     plot_data_list = []
-    
-    for i, group_col in enumerate(group_cols):
-        group_label = group_labels[i] if group_labels and i < len(group_labels) else group_col.replace('_', ' ').title()
-        
-        # Get data for absent group (0)
-        absent_data = data[data[group_col] == 0][variable].dropna()
-        for val in absent_data:
-            plot_data_list.append({
-                'value': val,
-                'group': group_label,
-                'status': 'Absent',
-                'group_idx': i
-            })
-        
-        # Get data for present group (1)
-        present_data = data[data[group_col] == 1][variable].dropna()
-        for val in present_data:
-            plot_data_list.append({
-                'value': val,
-                'group': group_label,
-                'status': 'Present', 
-                'group_idx': i
-            })
+    for group in groups:
+        # Population data for the left side of the violin
+        for val in population_df[variable].dropna():
+            plot_data_list.append({'value': val, 'cluster_group': f'Cluster {group}', 'status': 'Population'})
+        # Cluster data for the right side of the violin
+        for val in df[df[group_col] == group][variable].dropna():
+            plot_data_list.append({'value': val, 'cluster_group': f'Cluster {group}', 'status': 'Cluster'})
     
     if not plot_data_list:
-        raise ValueError("No valid data found for plotting")
-    
+        print(f"✗ No data to plot for {variable}.")
+        plt.close()
+        return
+
     plot_df = pd.DataFrame(plot_data_list)
-    
-    # Create plot
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    # Create split violin plot
-    sns.violinplot(data=plot_df, x='group_idx', y='value', hue='status',
-                   split=True, inner='quart', 
-                   palette={'Absent': '#5B9BD5', 'Present': '#E07B39'},
-                   ax=ax, linewidth=1.5)
-    
-    # Customize x-axis labels
-    group_names = [group_labels[i] if group_labels and i < len(group_labels) 
-                   else group_cols[i].replace('_', ' ').title() 
-                   for i in range(len(group_cols))]
-    
-    ax.set_xticks(range(len(group_cols)))
-    ax.set_xticklabels(group_names, rotation=45, ha='right')
-    
-    # Add sample sizes and significance markers if p_values provided
-    if p_values is not None:
-        for i, (group_col, p_val) in enumerate(zip(group_cols, p_values)):
-            absent_data = data[data[group_col] == 0][variable].dropna()
-            present_data = data[data[group_col] == 1][variable].dropna()
-            
-            # Add sample sizes above violins
-            y_max = ax.get_ylim()[1]
-            sample_text = f'n={len(absent_data)}|{len(present_data)}'
-            ax.text(i, y_max * 1.05, sample_text, ha='center', va='bottom', fontsize=8)
-            
-            # Add significance marker
-            if pd.notna(p_val):
-                if p_val < 0.01:
-                    ax.text(i, y_max * 1.15, '**', ha='center', va='bottom', 
-                           fontsize=12, fontweight='bold')
-                elif p_val < 0.05:
-                    ax.text(i, y_max * 1.15, '*', ha='center', va='bottom', 
-                           fontsize=12, fontweight='bold')
-    
-    # Customize plot
-    ax.set_xlabel('Groups')
-    ax.set_ylabel(variable.replace('_', ' ').title())
-    
-    if title:
-        ax.set_title(title, pad=20)
-    
-    # Update legend
-    handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles, labels, title='', loc='upper right')
-    
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    
-    return fig
 
-def create_stacked_bar_plot(
-    data: pd.DataFrame,
-    variable: str,
-    group_cols: List[str],
-    reference_data: pd.DataFrame = None,
-    output_path: str = None,
-    title: str = None,
-    group_labels: List[str] = None,
-    p_values: List[float] = None,
-    figsize: Tuple[int, int] = None
-) -> plt.Figure:
-    """
-    Create stacked bar plot comparing binary variable distributions across multiple groups.
+    # --- Plotting ---
+    sns.violinplot(
+        data=plot_df, x='cluster_group', y='value', hue='status',
+        split=True, inner='quart',
+        palette={'Population': '#5B9BD5', 'Cluster': '#E07B39'},
+        ax=ax
+    )
+
+    # --- Annotation and Styling ---
+    y_max = plot_df['value'].max()
+    for i, group in enumerate(groups):
+        p_raw = significance_map_raw.get(group) if significance_map_raw else None
+        p_fdr = significance_map_fdr.get(group) if significance_map_fdr else None
+        _annotate_significance(ax, i, y_max * 1.02, p_raw, p_fdr, alpha)
+
+    nice_variable_name = get_nice_name(variable, name_map)
+    ax.set_title(f'Distribution of {nice_variable_name}: Population vs Clusters', fontsize=16, weight='bold')
+    ax.set_ylabel(nice_variable_name, fontsize=14)
+    ax.set_xlabel('Clusters', fontsize=14)
+    ax.tick_params(axis='x', rotation=45)
     
-    Args:
-        data: DataFrame with binary variable and grouping columns
-        variable: Binary variable column name (0/1)
-        group_cols: List of grouping column names to compare
-        reference_data: Optional reference cohort for comparison line
-        output_path: Optional path to save plot
-        title: Plot title  
-        group_labels: Labels for the groups
-        p_values: Optional list of p-values for significance testing (same order as group_cols)
-        figsize: Figure size (width, height) - auto-calculated if None
+    output_path = os.path.join(output_dir, output_filename)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✓ Split-violin plot saved to: {output_path}")
+
+
+def plot_stacked_bar_comparison(
+    df: pd.DataFrame, population_df: pd.DataFrame, variable: str, group_col: str,
+    output_filename: str, name_map_path: str, output_dir: str,
+    significance_map_raw: Optional[Dict[Any, float]] = None,
+    significance_map_fdr: Optional[Dict[Any, float]] = None, alpha: float = 0.05
+):
+    """FINALIZED: Creates a stacked bar chart with the correct stacking order."""
+    os.makedirs(output_dir, exist_ok=True)
+    name_map = load_name_map(name_map_path)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    groups = sorted(df[group_col].unique())
     
-    Returns:
-        matplotlib Figure object
-    """
-    _apply_plot_styling()
-    
-    # Auto-calculate figure size based on number of groups
-    if figsize is None:
-        width = max(8, len(group_cols) * 1.2 + 2)  # +2 for reference if present
-        figsize = (width, 6)
-    
-    # Calculate proportions for each group
     results = []
+    pop_prop_1 = population_df[variable].mean() * 100
+    results.append({'group': 'Reference', 'prop_0': 100 - pop_prop_1, 'prop_1': pop_prop_1, 'n': len(population_df)})
+    for group in groups:
+        cluster_data = df[df[group_col] == group]
+        prop_1 = cluster_data[variable].mean() * 100
+        results.append({'group': f'Cluster {group}', 'prop_0': 100 - prop_1, 'prop_1': prop_1, 'n': len(cluster_data)})
+    plot_df = pd.DataFrame(results)
     
-    # Add reference data if provided
-    if reference_data is not None:
-        ref_prop = reference_data[variable].mean() * 100
-        results.append({
-            'group': 'Reference',
-            'prop_0': 100 - ref_prop,
-            'prop_1': ref_prop,
-            'n': len(reference_data)
-        })
+    fig, ax = plt.subplots(figsize=(max(10, len(plot_df) * 1.2), 7))
+    x_pos = np.arange(len(plot_df))
     
-    # Calculate proportions for each group
-    for i, group_col in enumerate(group_cols):
-        group_data = data[data[group_col] == 1]  # Only where group is present
-        if len(group_data) == 0:
-            continue
-            
-        prop_1 = group_data[variable].mean() * 100
-        prop_0 = 100 - prop_1
-        
-        group_name = group_labels[i] if group_labels and i < len(group_labels) else group_col.replace('_', ' ').title()
-        
-        results.append({
-            'group': group_name,
-            'prop_0': prop_0,
-            'prop_1': prop_1,
-            'n': len(group_data)
-        })
+    # --- Corrected Stacking Order ---
+    ax.bar(x_pos, plot_df['prop_1'], label='Achieved / Class 1', color=ACHIEVED_COLOR, alpha=0.8)
+    ax.bar(x_pos, plot_df['prop_0'], bottom=plot_df['prop_1'], label='Not Achieved / Class 0', color=NOT_ACHIEVED_COLOR, alpha=0.8)
     
-    if not results:
-        raise ValueError("No valid groups found for plotting")
+    ax.axhline(y=pop_prop_1, color='black', linestyle='--', linewidth=2, alpha=0.8, label=f'Population Mean ({pop_prop_1:.1f}%)')
     
-    df_results = pd.DataFrame(results)
-    
-    # Create plot
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    x_pos = np.arange(len(df_results))
-    
-    # Create stacked bars
-    bars_0 = ax.bar(x_pos, df_results['prop_0'], label='Category 0', 
-                    color='#FF9999', alpha=0.8)
-    bars_1 = ax.bar(x_pos, df_results['prop_1'], bottom=df_results['prop_0'], 
-                    label='Category 1', color='#66B2FF', alpha=0.8)
-    
-    # Add reference line if reference data provided
-    if reference_data is not None:
-        ref_prop = reference_data[variable].mean() * 100
-        ax.axhline(y=ref_prop, color='black', linestyle='--', linewidth=2, alpha=0.8,
-                   label=f'Reference ({ref_prop:.1f}%)')
-    
-    # Add sample size labels and significance markers
-    for i, (bar_0, bar_1, row) in enumerate(zip(bars_0, bars_1, df_results.itertuples())):
-        # Add n labels above bars
-        ax.text(bar_0.get_x() + bar_0.get_width()/2, 105, f'n={row.n}',
-                ha='center', va='bottom', fontweight='bold')
-        
-        # Add significance markers if p_values provided (skip reference bar)
-        if p_values is not None and reference_data is not None and i > 0:
-            p_idx = i - 1  # Adjust index for reference bar
-            if p_idx < len(p_values) and pd.notna(p_values[p_idx]):
-                if p_values[p_idx] < 0.01:
-                    ax.text(bar_0.get_x() + bar_0.get_width()/2, 115, '**',
-                           ha='center', va='bottom', fontsize=12, fontweight='bold')
-                elif p_values[p_idx] < 0.05:
-                    ax.text(bar_0.get_x() + bar_0.get_width()/2, 115, '*',
-                           ha='center', va='bottom', fontsize=12, fontweight='bold')
-        elif p_values is not None and reference_data is None and i < len(p_values):
-            if pd.notna(p_values[i]):
-                if p_values[i] < 0.01:
-                    ax.text(bar_0.get_x() + bar_0.get_width()/2, 115, '**',
-                           ha='center', va='bottom', fontsize=12, fontweight='bold')
-                elif p_values[i] < 0.05:
-                    ax.text(bar_0.get_x() + bar_0.get_width()/2, 115, '*',
-                           ha='center', va='bottom', fontsize=12, fontweight='bold')
-    
-    # Customize plot
-    ax.set_xlabel('Groups')
-    ax.set_ylabel('Percentage (%)')
-    ax.set_ylim(0, 120 if p_values is not None else 110)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(df_results['group'], rotation=45, ha='right')
-    
-    if title:
-        ax.set_title(title)
-    
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    
-    return fig
+    for i, row in plot_df.iterrows():
+        ax.text(i, 102, f'n={row["n"]}', ha='center', va='bottom', fontweight='bold')
+        if row['group'] != 'Reference':
+            cluster_num = int(row['group'].split(' ')[-1])
+            p_raw = significance_map_raw.get(cluster_num) if significance_map_raw else None
+            p_fdr = significance_map_fdr.get(cluster_num) if significance_map_fdr else None
+            _annotate_significance(ax, i, 108, p_raw, p_fdr, alpha)
 
+    nice_variable_name = get_nice_name(variable, name_map)
+    ax.set_title(f'Proportion of {nice_variable_name} vs Population', fontsize=16, weight='bold')
+    ax.set_ylabel('Percentage (%)', fontsize=14); ax.set_xlabel('Groups', fontsize=14)
+    ax.set_ylim(0, 120); ax.set_xticks(x_pos); ax.set_xticklabels(plot_df['group'], rotation=45, ha='right')
+    ax.legend(loc='upper right')
+    
+    plt.savefig(os.path.join(output_dir, output_filename), dpi=300, bbox_inches='tight'); plt.close()
+    print(f"✓ Corrected stacked bar plot saved to: {os.path.join(output_dir, output_filename)}")
+
+def plot_multi_lollipop(
+    data_df: pd.DataFrame, output_filename: str, name_map_path: str, output_dir: str
+):
+    """
+    FINALIZED: Creates the multi-variable lollipop plot, corrected for y-axis
+    labeling and overall robustness.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    name_map = load_name_map(name_map_path)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    # Ensure value column is numeric
+    data_df['value'] = pd.to_numeric(data_df['value'], errors='coerce')
+    data_df.dropna(subset=['value'], inplace=True)
+    if data_df.empty:
+        print(f"✗ No valid data for lollipop plot.")
+        return
+
+    variables = data_df['variable'].unique()
+    # Sort clusters numerically based on the integer after 'Cluster '
+    clusters = sorted(data_df['cluster'].unique(), key=lambda x: int(x.split(' ')[-1]))
+    
+    fig, ax = plt.subplots(figsize=(12, 2 + len(variables) * len(clusters) * 0.2))
+    colors = plt.cm.Set3(np.linspace(0, 1, len(clusters)))
+    cluster_colors = {cluster: color for cluster, color in zip(clusters, colors)}
+
+    y_pos = 0
+    y_ticks, y_tick_labels = [], []
+    
+    for var in variables:
+        var_data = data_df[data_df['variable'] == var].set_index('cluster').reindex(clusters).dropna()
+        if var_data.empty: continue
+
+        # Define the range of y-positions for the current variable
+        y_range = np.arange(y_pos, y_pos + len(var_data))
+        
+        ax.hlines(y=y_range, xmin=0, xmax=var_data['value'], colors=[cluster_colors.get(c, 'gray') for c in var_data.index], linewidth=2)
+        ax.scatter(var_data['value'], y_range, c=[cluster_colors.get(c, 'gray') for c in var_data.index], s=50, zorder=10)
+        
+        # Store the midpoint for the variable label
+        if y_range.size > 0:
+            y_ticks.append(np.mean(y_range))
+            y_tick_labels.append(get_nice_name(var, name_map))
+        
+        y_pos += len(var_data)
+        # Add a gap between variable groups
+        if len(variables) > 1:
+            y_pos += 0.5 
+            if var != variables[-1]:
+                ax.axhline(y=y_pos - 0.75, color='grey', linestyle='-', linewidth=0.5)
+
+    ax.set_yticks(y_ticks); ax.set_yticklabels(y_tick_labels, fontsize=12)
+    ax.invert_yaxis() # Display variables from top to bottom
+    
+    ax.axvline(x=0, color='black', linestyle='-', linewidth=1)
+    ax.set_title('Multi-Cluster Comparison: Percent Change vs Population Mean', fontsize=16, weight='bold')
+    ax.set_xlabel('Percent Change vs Population Mean (%)', fontsize=14)
+    ax.grid(True, axis='x', which='both', linestyle='--', linewidth=0.5)
+
+    legend_elements = [plt.Line2D([0], [0], marker='o', color=color, label=cluster, linestyle='None', markersize=8) for cluster, color in cluster_colors.items()]
+    ax.legend(handles=legend_elements, title='Clusters', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    plt.savefig(os.path.join(output_dir, output_filename), dpi=300, bbox_inches='tight'); plt.close()
+    print(f"✓ Multi-Lollipop plot saved to: {os.path.join(output_dir, output_filename)}")
+
+def plot_forest(
+    results_df: pd.DataFrame, output_filename: str, name_map_path: str, output_dir: str, 
+    effect_col: str = 'effect', ci_lower_col: str = 'ci_lower', ci_upper_col: str = 'ci_upper', 
+    label_col: str = 'group', title: str = 'Forest Plot'
+):
+    """FINALIZED: Creates a robust forest plot for pre-calculated effect sizes."""
+    os.makedirs(output_dir, exist_ok=True)
+    name_map = load_name_map(name_map_path)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    plot_data = results_df.sort_values(by=label_col, ascending=False)
+    fig, ax = plt.subplots(figsize=(10, max(6, len(plot_data) * 0.5)))
+    y_pos = np.arange(len(plot_data))
+
+    errors = [plot_data[effect_col] - plot_data[ci_lower_col], plot_data[ci_upper_col] - plot_data[effect_col]]
+    ax.errorbar(x=plot_data[effect_col], y=y_pos, xerr=errors, fmt='o', color='steelblue', ecolor='steelblue',
+                elinewidth=2, capsize=5, markersize=8)
+    ax.axvline(x=0, color='red', linestyle='--')
+    
+    ax.set_yticks(y_pos); ax.set_yticklabels(plot_data[label_col])
+    ax.set_title(title, fontsize=16, weight='bold'); ax.set_xlabel('Risk Difference', fontsize=14)
+    ax.grid(True, axis='x', which='both', linestyle='--', linewidth=0.5)
+
+    plt.savefig(os.path.join(output_dir, output_filename), dpi=300, bbox_inches='tight'); plt.close()
+    print(f"✓ Forest plot saved to: {os.path.join(output_dir, output_filename)}")
