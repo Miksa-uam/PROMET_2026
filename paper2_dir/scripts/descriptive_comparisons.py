@@ -63,6 +63,22 @@ def welchs_ttest(series1, series2):
     _, p_val = ttest_ind(s1, s2, equal_var=False, nan_policy='omit')
     return p_val
 
+def mann_whitney_u_test(series1, series2):
+    """Performs Mann-Whitney U test and returns the raw p-value."""
+    from scipy.stats import mannwhitneyu
+    
+    s1 = pd.to_numeric(series1, errors='coerce').dropna()
+    s2 = pd.to_numeric(series2, errors='coerce').dropna()
+    if len(s1) < 2 or len(s2) < 2:
+        return np.nan
+    
+    try:
+        _, p_val = mannwhitneyu(s1, s2, alternative='two-sided')
+        return p_val
+    except ValueError:
+        # Handle cases where all values are identical
+        return np.nan
+
 def categorical_pvalue(series1, series2):
     """Performs Chi-squared test and returns the raw p-value."""
     s1 = series1.dropna()
