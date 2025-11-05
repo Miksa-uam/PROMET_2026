@@ -166,22 +166,61 @@ def perform_comparison(g0, g1, var, vtype):
         p_value = np.nan
     return p_value
 
+# descriptive_comparisons.py
+
 def switch_pvalues_to_asterisks(df: pd.DataFrame, data_columns: list) -> pd.DataFrame:
     """Creates a publication-ready table by replacing p-values with significance asterisks."""
     pub_df = df.copy()
     p_value_cols_to_drop = [col for col in pub_df.columns if 'p-value' in col]
+    
+    # Explicitly convert all p-value columns to numeric at the start
+    for p_col in p_value_cols_to_drop:
+        pub_df[p_col] = pd.to_numeric(pub_df[p_col], errors='coerce')
+
     for data_col in data_columns:
         basename = data_col.replace(': Mean/N', '')
         raw_p_col = f"{basename}: p-value"
         fdr_p_col = f"{basename}: p-value (FDR-corrected)"
+
         if raw_p_col in pub_df.columns and fdr_p_col in pub_df.columns:
-            fdr_p = pd.to_numeric(pub_df[fdr_p_col], errors='coerce')
-            raw_p = pd.to_numeric(pub_df[raw_p_col], errors='coerce')
-            conditions = [fdr_p < 0.05, raw_p < 0.05]
+            # Now, the data is guaranteed to be numeric
+            fdr_p = pub_df[fdr_p_col]
+            raw_p = pub_df[raw_p_col]
+            
+            cond_fdr_sig = fdr_p < 0.05
+            cond_raw_only_sig = (raw_p < 0.05) & (fdr_p >= 0.05)
+            conditions = [cond_fdr_sig, cond_raw_only_sig]
             choices = [pub_df[data_col].astype(str) + '**', pub_df[data_col].astype(str) + '*']
+            
             pub_df[data_col] = np.select(conditions, choices, default=pub_df[data_col].astype(str))
+            
     pub_df.drop(columns=p_value_cols_to_drop, inplace=True, errors='ignore')
     return pub_df
+
+
+# def switch_pvalues_to_asterisks(df: pd.DataFrame, data_columns: list) -> pd.DataFrame:
+#     """Creates a publication-ready table by replacing p-values with significance asterisks."""
+#     pub_df = df.copy()
+#     p_value_cols_to_drop = [col for col in pub_df.columns if 'p-value' in col]
+#     for data_col in data_columns:
+#         basename = data_col.replace(': Mean/N', '')
+#         raw_p_col = f"{basename}: p-value"
+#         fdr_p_col = f"{basename}: p-value (FDR-corrected)"
+#         if raw_p_col in pub_df.columns and fdr_p_col in pub_df.columns:
+#             fdr_p = pd.to_numeric(pub_df[fdr_p_col], errors='coerce')
+#             raw_p = pd.to_numeric(pub_df[raw_p_col], errors='coerce')
+            
+#             cond_fdr_sig = fdr_p < 0.05
+#             cond_raw_only_sig = (raw_p < 0.05) & (fdr_p >= 0.05)
+#             conditions = [cond_fdr_sig, cond_raw_only_sig]
+#             choices = [pub_df[data_col].astype(str) + '**', pub_df[data_col].astype(str) + '*']
+#             pub_df[data_col] = np.select(conditions, choices, default=pub_df[data_col].astype(str))
+            
+#             # conditions = [fdr_p < 0.05, raw_p < 0.05]
+#             # choices = [pub_df[data_col].astype(str) + '**', pub_df[data_col].astype(str) + '*']
+#             # pub_df[data_col] = np.select(conditions, choices, default=pub_df[data_col].astype(str))
+#     pub_df.drop(columns=p_value_cols_to_drop, inplace=True, errors='ignore')
+#     return pub_df
 
 # =========================
 # 2. STRATIFIED COMPARISON FUNCTIONS
@@ -240,7 +279,7 @@ def demographic_stratification(df, df_mother, config: descriptive_comparisons_co
             if valid_pvals > 1:
                 print(f"FDR correction proceeding with {valid_pvals} valid p-values...")
                 corrections = {col: apply_fdr_correction(pvals) for col, pvals in pvalue_dict.items()}
-                summary_df = integrate_corrected_pvalues(summary_df, corrections, " (FDR-corrected)")
+                summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
                 print(f"FDR correction applied to {len(pvalue_columns)} demographic p-value columns")
             else:
                 print(f"Warning: FDR correction skipped, only {valid_pvals} valid p-value(s) found.")
@@ -286,7 +325,7 @@ def wgc_stratification(df, config: descriptive_comparisons_config, conn):
                 if valid_pvals > 1:
                     print(f"FDR correction proceeding with {valid_pvals} valid p-values...")
                     corrections = {col: apply_fdr_correction(pvals) for col, pvals in pvalue_dict.items()}
-                    summary_df = integrate_corrected_pvalues(summary_df, corrections, " (FDR-corrected)")
+                    summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
                     print(f"FDR correction applied to {len(pvalue_columns)} weight gain cause p-value columns")
                 else:
                     print(f"Warning: FDR correction skipped, only {valid_pvals} valid p-value(s) found.")
@@ -326,7 +365,6 @@ def wgc_vs_population_mean_analysis(df, config: descriptive_comparisons_config, 
             row[f"{label}: Mean/N"] = format_value(group, var, vtype)
             p_val = perform_comparison(df, group, var, vtype)
             row[f"{label}: p-value"] = p_val
-            if config.fdr_correction: row[f"{label}: p-value (FDR-corrected)"] = p_val
         summary_rows.append(row)
     summary_df = pd.DataFrame(add_empty_rows_and_pretty_names(summary_rows, row_order))
     if config.fdr_correction:
@@ -336,7 +374,7 @@ def wgc_vs_population_mean_analysis(df, config: descriptive_comparisons_config, 
                 print("Applying FDR correction to WGC vs population mean p-values...")
                 p_dict = collect_pvalues_from_dataframe(summary_df, p_cols)
                 corrections = {col: apply_fdr_correction(pvals) for col, pvals in p_dict.items()}
-                summary_df = integrate_corrected_pvalues(summary_df, corrections, " (FDR-corrected)")
+                summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
                 print(f"FDR correction applied to {len(p_cols)} columns.")
         except Exception as e:
             print(f"Error: FDR correction failed. Continuing with raw p-values. Details: {e}")
