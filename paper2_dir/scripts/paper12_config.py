@@ -76,7 +76,7 @@ class descriptive_comparisons_config:
     wgc_strata: List[str] # This can be left empty if not needed
 
     # Optional plot filename
-    bias_plot_filename: Optional[str] = None
+    # bias_plot_filename: Optional[str] = None
     
     # Optional WGC vs population mean analysis
     wgc_vs_mean_output_table: Optional[str] = None
