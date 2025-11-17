@@ -70,6 +70,7 @@ def mann_whitney_u_test(series1, series2):
     except ValueError:
         return 1.0
 
+# ! no FISHER!
 def categorical_pvalue(series1, series2):
     """Performs Chi-squared test and returns the raw p-value."""
     s1 = series1.dropna()
@@ -197,30 +198,6 @@ def switch_pvalues_to_asterisks(df: pd.DataFrame, data_columns: list) -> pd.Data
     pub_df.drop(columns=p_value_cols_to_drop, inplace=True, errors='ignore')
     return pub_df
 
-
-# def switch_pvalues_to_asterisks(df: pd.DataFrame, data_columns: list) -> pd.DataFrame:
-#     """Creates a publication-ready table by replacing p-values with significance asterisks."""
-#     pub_df = df.copy()
-#     p_value_cols_to_drop = [col for col in pub_df.columns if 'p-value' in col]
-#     for data_col in data_columns:
-#         basename = data_col.replace(': Mean/N', '')
-#         raw_p_col = f"{basename}: p-value"
-#         fdr_p_col = f"{basename}: p-value (FDR-corrected)"
-#         if raw_p_col in pub_df.columns and fdr_p_col in pub_df.columns:
-#             fdr_p = pd.to_numeric(pub_df[fdr_p_col], errors='coerce')
-#             raw_p = pd.to_numeric(pub_df[raw_p_col], errors='coerce')
-            
-#             cond_fdr_sig = fdr_p < 0.05
-#             cond_raw_only_sig = (raw_p < 0.05) & (fdr_p >= 0.05)
-#             conditions = [cond_fdr_sig, cond_raw_only_sig]
-#             choices = [pub_df[data_col].astype(str) + '**', pub_df[data_col].astype(str) + '*']
-#             pub_df[data_col] = np.select(conditions, choices, default=pub_df[data_col].astype(str))
-            
-#             # conditions = [fdr_p < 0.05, raw_p < 0.05]
-#             # choices = [pub_df[data_col].astype(str) + '**', pub_df[data_col].astype(str) + '*']
-#             # pub_df[data_col] = np.select(conditions, choices, default=pub_df[data_col].astype(str))
-#     pub_df.drop(columns=p_value_cols_to_drop, inplace=True, errors='ignore')
-#     return pub_df
 
 # =========================
 # 2. STRATIFIED COMPARISON FUNCTIONS
@@ -385,6 +362,114 @@ def wgc_vs_population_mean_analysis(df, config: descriptive_comparisons_config, 
     pub_df = switch_pvalues_to_asterisks(summary_df, data_cols)
     pub_df.to_sql(output_table_name, conn, if_exists='replace', index=False)
     print(f"Publication-ready WGC vs population mean analysis table saved to {output_table_name}")
+
+def cluster_vs_population_mean_analysis(df, config: descriptive_comparisons_config, conn, cluster_col: str = 'cluster_id'):
+    """
+    Performs cluster vs population mean analysis for WGC variables.
+    Analyzes the prevalence of each WGC in each cluster compared to the population.
+    
+    Args:
+        df: DataFrame with cluster_id column and WGC binary variables
+        config: Configuration object (reuse existing config structure)
+        conn: Database connection for saving results
+        cluster_col: Name of column containing cluster IDs (default: 'cluster_id')
+    
+    Returns:
+        DataFrame for heatmap generation with prevalence data
+    """
+    output_table_name = getattr(config, 'cluster_vs_mean_output_table', None)
+    if not isinstance(output_table_name, str) or not output_table_name.strip():
+        return None
+    
+    # Validate cluster column exists
+    if cluster_col not in df.columns:
+        raise ValueError(f"Cluster column '{cluster_col}' not found in DataFrame. Available columns: {df.columns.tolist()}")
+    
+    print("Running Cluster vs Population Mean Analysis...")
+    
+    # Check for sufficient data
+    if len(df) < 10:
+        print(f"⚠️ Warning: Very small sample size (n={len(df)}). Results may be unreliable.")
+    
+    row_order = config.row_order
+    cause_cols = get_cause_cols(row_order)
+    var_types = get_variable_types(df, cause_cols)
+    
+    # Get unique clusters and create groups
+    clusters = sorted(df[cluster_col].dropna().unique())
+    cluster_labels = [f'Cluster {int(cid)}' for cid in clusters]
+    groups = {}
+    
+    for cluster_id in clusters:
+        label = f'Cluster {int(cluster_id)}'
+        cluster_df = df[df[cluster_col] == cluster_id]
+        groups[label] = cluster_df
+        
+        # Warn about small clusters
+        if len(cluster_df) < 5:
+            print(f"⚠️ Warning: {label} has only {len(cluster_df)} samples. Statistical tests may be unreliable.")
+    
+    # Build summary rows - analyzing WGC variables (rows) across clusters (columns)
+    summary_rows = []
+    
+    # N row
+    n_row = {"Variable": "N", "Population Mean (\u00B1SD) or N (%)": len(df)}
+    for label in cluster_labels:
+        n_row[f"{label}: Mean/N"] = len(groups[label])
+        n_row[f"{label}: p-value"] = "N/A"
+    summary_rows.append(n_row)
+    
+    # Process each WGC variable (rows in the output)
+    for i, (var, _) in enumerate(row_order):
+        if var == "N" or var.startswith("delim_"):
+            continue
+        if var not in cause_cols:  # Only process WGC variables
+            continue
+        
+        print(f"  Processing WGC variable {i}/{len(row_order)}: {var}")
+        vtype = var_types.get(var, "categorical")  # WGCs are categorical
+        row = {"Variable": var}
+        
+        # Population mean for this WGC
+        row["Population Mean (\u00B1SD) or N (%)"] = format_value(df, var, vtype)
+        
+        # For each cluster, calculate WGC prevalence and compare to population
+        for label in cluster_labels:
+            cluster_df = groups[label]
+            row[f"{label}: Mean/N"] = format_value(cluster_df, var, vtype)
+            p_val = perform_comparison(df, cluster_df, var, vtype)
+            row[f"{label}: p-value"] = p_val
+        
+        summary_rows.append(row)
+    
+    # Create DataFrame and apply FDR correction
+    summary_df = pd.DataFrame(add_empty_rows_and_pretty_names(summary_rows, row_order))
+    
+    if config.fdr_correction:
+        try:
+            p_cols = [f"{label}: p-value" for label in cluster_labels]
+            if p_cols:
+                print("Applying FDR correction to cluster vs population mean p-values...")
+                p_dict = collect_pvalues_from_dataframe(summary_df, p_cols)
+                corrections = {col: apply_fdr_correction(pvals) for col, pvals in p_dict.items()}
+                summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
+                print(f"FDR correction applied to {len(p_cols)} columns.")
+        except Exception as e:
+            print(f"Error: FDR correction failed. Continuing with raw p-values. Details: {e}")
+    
+    # Save detailed table with p-values
+    detailed_name = f"{output_table_name}_detailed"
+    summary_df.to_sql(detailed_name, conn, if_exists="replace", index=False)
+    print(f"Detailed cluster vs population mean analysis table saved to {detailed_name}")
+    
+    # Create publication-ready table with asterisks
+    data_cols = [col for col in summary_df.columns if ': Mean/N' in col]
+    pub_df = switch_pvalues_to_asterisks(summary_df, data_cols)
+    pub_df.to_sql(output_table_name, conn, if_exists='replace', index=False)
+    print(f"Publication-ready cluster vs population mean analysis table saved to {output_table_name}")
+    
+    # Return DataFrame for heatmap generation
+    return summary_df
 
 # =========================
 # 3. MAIN PIPELINE

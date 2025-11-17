@@ -55,6 +55,7 @@ class descriptive_comparisons_config:
         wgc_strata: List of weight gain causes to stratify by (can be empty if not needed)
         bias_plot_filename: Optional filename for bias plot output
         wgc_vs_mean_output_table: Optional output table name for WGC vs population mean analysis
+        cluster_vs_mean_output_table: Optional output table name for cluster vs population mean analysis
         fdr_correction: Whether to apply False Discovery Rate correction using Benjamini-Hochberg method.
                        When True, adds FDR-corrected p-value columns with "(FDR-corrected)" suffix.
                        When False (default), behaves as original implementation with raw p-values only.
@@ -80,6 +81,9 @@ class descriptive_comparisons_config:
     
     # Optional WGC vs population mean analysis
     wgc_vs_mean_output_table: Optional[str] = None
+    
+    # Optional cluster vs population mean analysis
+    cluster_vs_mean_output_table: Optional[str] = None
     
     # FDR correction setting
     fdr_correction: bool = False

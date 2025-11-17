@@ -1,0 +1,20 @@
+{
+  "cluster_labels": {
+    "0": "Male-dominant, inactive",
+    "1": "Women's health",
+    "2": "Unspecified causes",
+    "3": "External events",
+    "4": "Medical issues",
+    "5": "Unhealthy eating",
+    "6": "Mental health"
+  },
+  "cluster_colors": {
+    "0": "#FF6700",
+    "1": "#1f77b4",
+    "2": "#2ca02c",
+    "3": "#d62728",
+    "4": "#9467bd",
+    "5": "#8c564b",
+    "6": "#e377c2"
+  }
+}

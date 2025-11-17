@@ -45,16 +45,16 @@
   "15%_wl_achieved": "Achieved 15% weight loss (n)",
   "days_to_15%_wl": "Days to 15% weight loss",
 
-  "womens_health_and_pregnancy": "Women's health and pregnancy (yes/no)",
-  "mental_health": "Mental health (yes/no)",
-  "family_issues": "Family issues (yes/no)",
-  "medication_disease_injury": "Medication, disease or injury (yes/no)",
-  "physical_inactivity": "Physical inactivity (yes/no)",
-  "eating_habits": "Eating habits (yes/no)",
-  "schedule": "Schedule (yes/no)",
-  "smoking_cessation": "Smoking cessation (yes/no)",
-  "treatment_discontinuation_or_relapse": "Treatment discontinuation or relapse (yes/no)",
-  "pandemic": "COVID-19 pandemic (yes/no)",
-  "lifestyle_circumstances": "Lifestyle circumstances (yes/no)",
-  "none_of_above": "None of the above (yes/no)"
+  "womens_health_and_pregnancy": "Women's health and pregnancy",
+  "mental_health": "Mental health",
+  "family_issues": "Family issues",
+  "medication_disease_injury": "Medication, disease or injury",
+  "physical_inactivity": "Physical inactivity",
+  "eating_habits": "Eating habits",
+  "schedule": "Schedule",
+  "smoking_cessation": "Smoking cessation",
+  "treatment_discontinuation_or_relapse": "Treatment discontinuation or relapse",
+  "pandemic": "COVID-19 pandemic",
+  "lifestyle_circumstances": "External circumstances",
+  "none_of_above": "None of the above"
 }
