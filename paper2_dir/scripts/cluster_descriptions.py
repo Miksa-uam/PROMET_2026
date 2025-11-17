@@ -311,7 +311,8 @@ def extract_pvalues_for_lollipop(
     variables: List[str],
     cluster_df: pd.DataFrame,
     cluster_col: str = 'cluster_id',
-    cluster_config_path: str = 'cluster_config.json'
+    cluster_config_path: str = 'cluster_config.json',
+    name_map_path: str = 'human_readable_variable_names.json'
     ) -> Tuple[Dict[str, Dict[int, float]], Dict[str, Dict[int, float]]]:
     """
     Helper function to extract p-values from analyze_cluster_vs_population results.
@@ -320,14 +321,15 @@ def extract_pvalues_for_lollipop(
     
     Args:
         results_df: DataFrame returned by analyze_cluster_vs_population
-        variables: List of variables to extract p-values for
+        variables: List of RAW variable names (snake_case) to extract p-values for
         cluster_df: Original cluster DataFrame (to get cluster IDs)
         cluster_col: Column name for cluster IDs
         cluster_config_path: Path to cluster configuration (for label lookup)
+        name_map_path: Path to variable name mappings (for nice name lookup)
     
     Returns:
         Tuple of (pvalues_raw, pvalues_fdr) dictionaries
-        Each dict maps {variable: {cluster_id: p_value}}
+        Each dict maps {raw_variable_name: {cluster_id: p_value}}
     
     Example:
         >>> results_df = analyze_cluster_vs_population(...)
@@ -337,6 +339,7 @@ def extract_pvalues_for_lollipop(
         >>> plot_cluster_lollipop(..., pvalues_raw=pvalues_raw, pvalues_fdr=pvalues_fdr)
     """
     cluster_config = load_cluster_config(cluster_config_path)
+    name_map = load_name_map(name_map_path)
     clusters = sorted(cluster_df[cluster_col].unique())
     
     pvalues_raw = {}
@@ -346,8 +349,11 @@ def extract_pvalues_for_lollipop(
         pvalues_raw[var] = {}
         pvalues_fdr[var] = {}
         
-        # Get row for this variable
-        var_row = results_df[results_df['Variable'] == var]
+        # Convert raw variable name to nice name for lookup in results_df
+        nice_name = get_nice_name(var, name_map)
+        
+        # Get row for this variable using nice name
+        var_row = results_df[results_df['Variable'] == nice_name]
         
         if var_row.empty:
             print(f"  ⚠️ Warning: Variable '{var}' not found in results_df")
@@ -544,80 +550,170 @@ def _plot_single_violin(
     title: Optional[str] = None,
     ylabel: Optional[str] = None,
     xlabel: Optional[str] = None):
-    """Internal function to plot a single violin plot with cluster-specific colors."""
+    """Internal function to plot a single horizontal violin plot with all clusters."""
     plt.style.use('seaborn-v0_8-whitegrid')
     
     clusters = sorted(cluster_df[cluster_col].unique())
     n_clusters = len(clusters)
     
-    # Create figure with subplots - one per cluster
-    fig, axes = plt.subplots(1, n_clusters, figsize=(n_clusters * 4, 8), sharey=True)
-    
-    # Handle single cluster case (axes is not an array)
-    if n_clusters == 1:
-        axes = [axes]
-    
     # Population is the entire clustered dataset
     population_data = cluster_df[variable].dropna()
+    pop_median = population_data.median()
+    pop_q1 = population_data.quantile(0.25)
+    pop_q3 = population_data.quantile(0.75)
+    pop_n = len(population_data)
     
-    # Get nice name for labels
-    nice_name = get_nice_name(variable, name_map)
+    # Prepare data for all clusters in one plot
+    plot_data_list = []
+    stats_data = []
     
-    # Determine y-axis limits for consistent scaling and significance markers
-    all_values = cluster_df[variable].dropna()
-    y_max = all_values.max()
-    y_min = all_values.min()
-    
-    for i, cluster_id in enumerate(clusters):
-        ax = axes[i]
-        
-        # Get cluster-specific label and color
+    for cluster_id in clusters:
         cluster_label = get_cluster_label(cluster_id, cluster_config)
         cluster_color = get_cluster_color(cluster_id, cluster_config, DEFAULT_PALETTE)
+        cluster_data = cluster_df[cluster_df[cluster_col] == cluster_id][variable].dropna()
         
-        # Prepare data for this cluster's split violin
-        plot_data_list = []
-        
-        # Population data (left side)
+        # Population data for this cluster position
         for val in population_data:
             plot_data_list.append({
                 'value': val,
-                'status': 'Population'
+                'cluster': cluster_label,
+                'type': 'Population'
             })
         
-        # Cluster data (right side)
-        cluster_data = cluster_df[cluster_df[cluster_col] == cluster_id][variable].dropna()
+        # Cluster data
         for val in cluster_data:
             plot_data_list.append({
                 'value': val,
-                'status': 'Cluster'
+                'cluster': cluster_label,
+                'type': 'Cluster'
             })
         
-        plot_df = pd.DataFrame(plot_data_list)
+        # Calculate stats
+        cluster_median = cluster_data.median()
+        cluster_q1 = cluster_data.quantile(0.25)
+        cluster_q3 = cluster_data.quantile(0.75)
+        cluster_n = len(cluster_data)
         
-        # Create palette with cluster-specific color
-        palette = {'Population': POPULATION_COLOR, 'Cluster': cluster_color}
+        p_raw = sig_raw.get(cluster_id) if sig_raw else None
+        p_fdr = sig_fdr.get(cluster_id) if sig_fdr else None
         
-        # Plot split violin with cluster-specific color
-        sns.violinplot(
-            data=plot_df, y='value', hue='status',
-            split=True, inner='quart', palette=palette, ax=ax
-        )
-        
-        # Add significance markers
-        if sig_raw or sig_fdr:
-            p_raw = sig_raw.get(cluster_id) if sig_raw else None
-            p_fdr = sig_fdr.get(cluster_id) if sig_fdr else None
-            _annotate_significance(ax, 0, y_max * 1.02, p_raw, p_fdr, alpha)
-        
-        # Set cluster label as subplot title
-        ax.set_title(cluster_labels)
+        stats_data.append({
+            'cluster_id': cluster_id,
+            'cluster_label': cluster_label,
+            'cluster_color': cluster_color,
+            'pop_n': pop_n,
+            'cluster_n': cluster_n,
+            'pop_median': pop_median,
+            'pop_q1': pop_q1,
+            'pop_q3': pop_q3,
+            'cluster_median': cluster_median,
+            'cluster_q1': cluster_q1,
+            'cluster_q3': cluster_q3,
+            'p_raw': p_raw,
+            'p_fdr': p_fdr
+        })
     
-    ax.set_title(plot_title, fontsize=16, weight='bold')
-    ax.set_ylabel(plot_ylabel, fontsize=14)
-    ax.set_xlabel(plot_xlabel, fontsize=14)
-    plt.setp(ax.get_xticklabels(), rotation=45, ha='center')
-    ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.08), ncol=2)
+    plot_df = pd.DataFrame(plot_data_list)
+    stats_df = pd.DataFrame(stats_data)
+    
+    # Create figure with proper margins for outer layers
+    fig = plt.figure(figsize=(max(14, n_clusters * 2), 10))
+    # Adjust subplot to leave room: [left, bottom, width, height]
+    ax = fig.add_axes([0.1, 0.1, 0.85, 0.75])  # Adjust padding for labels
+    
+    # Create split violins for each cluster
+    cluster_labels_ordered = [get_cluster_label(cid, cluster_config) for cid in clusters]
+    
+    # Plot using seaborn with custom palette
+    palette_dict = {}
+    for _, row in stats_df.iterrows():
+        palette_dict[row['cluster_label']] = {
+            'Population': POPULATION_COLOR,
+            'Cluster': row['cluster_color']
+        }
+    
+    # Create the plot
+    sns.violinplot(
+        data=plot_df, x= 'cluster', y='value', hue='type', # hue = 'type' will automatically create a type legend (Population vs Cluster)
+        split=True, inner='quart', 
+        order=cluster_labels_ordered,
+        palette={'Population': POPULATION_COLOR, 'Cluster': CLUSTER_COLOR},  # Will override per cluster
+        ax=ax
+    )
+
+    # Set the location of the 'type' box, containing color codes for the split violins
+    ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.95), 
+          title='Type', frameon=True, fancybox=True)
+    
+    # Get data range for violin plot
+    y_max = plot_df['value'].max()
+    y_min = plot_df['value'].min()
+    y_range = y_max - y_min
+    
+    # Set axis limits with padding for violins
+    ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.05)
+    ax.set_xlim(-0.6, n_clusters - 0.4)
+    ax.set_xticks(range(n_clusters))
+    ax.set_xticklabels([])
+    
+    # Styling
+    nice_name = get_nice_name(variable, name_map)
+    plot_title = title.format(variable=nice_name) if title else f'Distribution of {nice_name}'
+    plot_ylabel = ylabel.format(variable=nice_name) if ylabel else nice_name
+    
+    ax.set_ylabel(plot_ylabel, fontsize=13)
+    ax.tick_params(labelsize=10)
+
+    # Remove automatic x axis label
+    ax.set_xlabel('')
+    
+    # Get figure dimensions for coordinate conversion
+    fig_width, fig_height = fig.get_size_inches()
+    
+    # MIDDLE LAYER: Statistical boxes, asterisks, p-values (in figure coordinates)
+    for i, row in stats_df.iterrows():
+        # Convert data x-coord to figure coord
+        x_fig = ax.transData.transform((i, 0))[0] / fig.dpi / fig_width
+        
+        # Statistical box above violins
+        stats_text = f"n={row['pop_n']} | n={row['cluster_n']}\nMedian: {row['pop_median']:.1f} | {row['cluster_median']:.1f}"
+        fig.text(x_fig, 0.87, stats_text, 
+                ha='center', va='center', fontsize=11,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'))
+        
+        # Significance asterisks below violins
+        sig_text = ''
+        if row['p_fdr'] is not None and pd.notna(row['p_fdr']) and row['p_fdr'] < alpha:
+            sig_text = '**'
+        elif row['p_raw'] is not None and pd.notna(row['p_raw']) and row['p_raw'] < alpha:
+            sig_text = '*'
+        
+        if sig_text:
+            fig.text(x_fig, 0.08, sig_text, 
+                    ha='center', va='center', fontsize=13, weight='bold')
+        
+        # P-values below asterisks (NO "cluster" label)
+        if row['p_raw'] is not None and pd.notna(row['p_raw']):
+            p_text = f"p={row['p_raw']:.3f}"
+            if row['p_fdr'] is not None and pd.notna(row['p_fdr']):
+                p_text += f"\np(FDR)={row['p_fdr']:.3f}"
+            fig.text(x_fig, 0.06, p_text, 
+                    ha='center', va='top', fontsize=11, style='italic')
+        
+        # Cluster labels below p-values
+        fig.text(x_fig, 0.02, f"{row['cluster_label']}\n(n={row['cluster_n']})", 
+                ha='right', va='top', fontsize=13, rotation=45)
+    
+    # X-axis label at outermost position (below all cluster labels)
+    # fig.text(0.5, 0.001, 'cluster', ha='center', fontsize=12, weight='bold')
+    
+    # Significance legend box
+    sig_legend = "Significance:\n* p < 0.05 (raw)\n** p < 0.05 (FDR-corrected)"
+    fig.text(0.96, 0.75, sig_legend, ha='left', va='center', fontsize=11,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.2, edgecolor='black'))
+    
+    # FRAME: Title
+    fig.suptitle(plot_title, fontsize=15, weight='bold', y=0.96)
     
     # Save
     output_path = os.path.join(output_dir, f'{variable}_violin.png')
@@ -723,7 +819,7 @@ def _plot_single_stacked_bar(
     xlabel: Optional[str] = None,
     legend_labels: Optional[Dict] = None
     ):
-    """Internal function to plot a single stacked bar chart."""
+    """Internal function to plot a single stacked bar chart with improved design."""
     plt.style.use('seaborn-v0_8-whitegrid')
     
     clusters = sorted(cluster_df[cluster_col].unique())
@@ -731,82 +827,156 @@ def _plot_single_stacked_bar(
     # Prepare data - population is entire clustered dataset
     results = []
     pop_prop_1 = cluster_df[variable].mean() * 100
+    pop_n_1 = cluster_df[variable].sum()
+    pop_n_0 = len(cluster_df) - pop_n_1
+    
     results.append({
         'group': 'Whole population',
         'prop_0': 100 - pop_prop_1,
         'prop_1': pop_prop_1,
-        'n': len(cluster_df),
-        'group_id': None
+        'n_0': int(pop_n_0),
+        'n_1': int(pop_n_1),
+        'n_total': len(cluster_df),
+        'group_id': None,
+        'p_raw': None,
+        'p_fdr': None
     })
     
     for cluster_id in clusters:
         cluster_subset = cluster_df[cluster_df[cluster_col] == cluster_id]
         prop_1 = cluster_subset[variable].mean() * 100
+        n_1 = cluster_subset[variable].sum()
+        n_0 = len(cluster_subset) - n_1
         cluster_label = get_cluster_label(cluster_id, cluster_config)
         
         results.append({
             'group': cluster_label,
             'prop_0': 100 - prop_1,
             'prop_1': prop_1,
-            'n': len(cluster_subset),
-            'group_id': cluster_id
+            'n_0': int(n_0),
+            'n_1': int(n_1),
+            'n_total': len(cluster_subset),
+            'group_id': cluster_id,
+            'p_raw': sig_raw.get(cluster_id) if sig_raw else None,
+            'p_fdr': sig_fdr.get(cluster_id) if sig_fdr else None
         })
     
     plot_df = pd.DataFrame(results)
     
-    # Plot
-    fig, ax = plt.subplots(figsize=(max(10, len(plot_df) * 1.2), 7))
+    # Create figure with proper margins for outer layers
+    fig = plt.figure(figsize=(max(14, len(plot_df) * 1.8), 10))
+    # Adjust subplot to leave room: [left, bottom, width, height]
+    ax = fig.add_axes([0.1, 0.25, 0.85, 0.60])  # Leave 25% bottom, 15% top for labels
+    
     x_pos = np.arange(len(plot_df))
     
     # Get legend labels
     if legend_labels:
-        label_1 = legend_labels.get('achieved', 'Achieved / Class 1')
-        label_0 = legend_labels.get('not_achieved', 'Not Achieved / Class 0')
+        label_1 = legend_labels.get('achieved', 'Achieved')
+        label_0 = legend_labels.get('not_achieved', 'Not Achieved')
     else:
-        label_1 = 'Achieved / Class 1'
-        label_0 = 'Not Achieved / Class 0'
+        label_1 = 'Achieved'
+        label_0 = 'Not Achieved'
     
+    # INNERMOST LAYER: Plot bars (0-100% range ONLY)
     ax.bar(x_pos, plot_df['prop_1'], label=label_1, color=ACHIEVED_COLOR, alpha=0.8)
     ax.bar(x_pos, plot_df['prop_0'], bottom=plot_df['prop_1'], label=label_0, color=NOT_ACHIEVED_COLOR, alpha=0.8)
     
-    ax.axhline(y=pop_prop_1, color='black', linestyle='--', linewidth=2, alpha=0.8,
-               label=f'Population Mean ({pop_prop_1:.1f}%)')
+    # Population mean line
+    ax.axhline(y=pop_prop_1, color='black', linestyle='--', linewidth=2, alpha=0.8)
     
-    # Styling with configurable labels
-    nice_name = get_nice_name(variable, name_map)
-    
-    if title:
-        plot_title = title.format(variable=nice_name)
-    else:
-        plot_title = f'Proportion of {nice_name} vs Population'
-    
-    if ylabel:
-        plot_ylabel = ylabel
-    else:
-        plot_ylabel = 'Percentage (%)'
-    
-    if xlabel:
-        plot_xlabel = xlabel
-    else:
-        plot_xlabel = 'Groups'
-    
-    ax.set_title(plot_title, fontsize=16, weight='bold')
-    ax.set_ylabel(plot_ylabel, fontsize=14)
-    ax.set_xlabel(plot_xlabel, fontsize=14)
-    ax.set_ylim(0, 120)  # Extended to 120 to accommodate labels and significance markers above bars
-    ax.set_yticks(range(0, 101, 20))  # Only show ticks up to 100
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(plot_df['group'], rotation=45, ha='right')
-    ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
-    
-    # Add sample sizes and significance (after setting ylim)
+    # Add significance asterisks just above population line (INSIDE plot)
     for i, row in plot_df.iterrows():
-        ax.text(i, 101, f'n={row["n"]}', ha='center', va='bottom', fontweight='bold', clip_on=False)
-        if row['group'] != 'Reference':
-            cluster_id = row['group_id']
-            p_raw = sig_raw.get(cluster_id) if sig_raw else None
-            p_fdr = sig_fdr.get(cluster_id) if sig_fdr else None
-            _annotate_significance(ax, i, 104, p_raw, p_fdr, alpha)
+        if row['group_id'] is not None:
+            sig_text = ''
+            if row['p_fdr'] is not None and pd.notna(row['p_fdr']) and row['p_fdr'] < alpha:
+                sig_text = '**'
+            elif row['p_raw'] is not None and pd.notna(row['p_raw']) and row['p_raw'] < alpha:
+                sig_text = '*'
+            if sig_text:
+                ax.text(i, pop_prop_1 + 2, sig_text, ha='center', va='bottom', 
+                       fontsize=12, weight='bold')
+    
+    # Set axis limits STRICTLY to 0-100
+    ax.set_ylim(0, 100)
+    ax.set_yticks(range(0, 101, 20))
+    ax.set_xlim(-0.6, len(plot_df) - 0.4)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([])
+    
+    # Styling
+    nice_name = get_nice_name(variable, name_map)
+    plot_title = title.format(variable=nice_name) if title else f'{nice_name}'
+    plot_ylabel = ylabel if ylabel else 'Percentage (%)'
+    plot_xlabel = xlabel if xlabel else 'Clusters'
+    
+    ax.set_ylabel(plot_ylabel, fontsize=12)
+    ax.tick_params(labelsize=10)
+    
+    # MIDDLE LAYER: N (%) labels in figure coordinates (truly outside plot)
+    for i, row in plot_df.iterrows():
+        # Convert data coords to figure coords
+        x_fig = ax.transData.transform((i, 0))[0] / fig.dpi / fig.get_size_inches()[0]
+        
+        # FIXED: Top box always shows class 1 (achieved), bottom box always shows class 0 (not achieved)
+        # This matches the stacking order where class 1 is at bottom, class 0 is stacked on top
+        top_label = f"{row['n_0']} ({row['prop_0']:.1f}%)"
+        top_color = NOT_ACHIEVED_COLOR  # Match bar color
+        bottom_label = f"{row['n_1']} ({row['prop_1']:.1f}%)"
+        bottom_color = ACHIEVED_COLOR  # Match bar color
+        
+        # Top box (above plot) - corresponds to top of stacked bar (class 0)
+        fig.text(x_fig, 0.87, top_label, 
+                ha='center', va='center', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=top_color, alpha=0.8, edgecolor='black'))
+        
+        # Bottom box (below plot) - corresponds to bottom of stacked bar (class 1)
+        fig.text(x_fig, 0.23, bottom_label, 
+                ha='center', va='center', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=bottom_color, alpha=0.8, edgecolor='black'))
+        
+        # P-values (below bottom box)
+        if row['group_id'] is not None and row['p_raw'] is not None and pd.notna(row['p_raw']):
+            p_text = f"p={row['p_raw']:.3f}"
+            if row['p_fdr'] is not None and pd.notna(row['p_fdr']):
+                p_text += f"\np(FDR)={row['p_fdr']:.3f}"
+            fig.text(x_fig, 0.17, p_text, ha='center', va='top', 
+                    fontsize=7, style='italic')
+        
+        # Cluster labels (below p-values)
+        fig.text(x_fig, 0.10, f"{row['group']}\n(n={row['n_total']})", 
+                ha='right', va='top', fontsize=9, rotation=45)
+    
+    # X-axis label
+    fig.text(0.5, 0.02, plot_xlabel, ha='center', fontsize=12, weight='bold')
+    
+    # OUTER LAYER: Legend boxes on RIGHT side (in figure coordinates)
+    # Outcome legend box with COLORS
+    from matplotlib.patches import Rectangle
+    outcome_legend_y = 0.70
+    # Draw colored boxes for legend
+    fig.patches.extend([
+        Rectangle((0.955, outcome_legend_y + 0.02), 0.01, 0.02, 
+                 transform=fig.transFigure, facecolor=ACHIEVED_COLOR, edgecolor='black', alpha=0.8),
+        Rectangle((0.955, outcome_legend_y - 0.02), 0.01, 0.02, 
+                 transform=fig.transFigure, facecolor=NOT_ACHIEVED_COLOR, edgecolor='black', alpha=0.8)
+    ])
+    outcome_legend = f"  {label_1}\n  {label_0}"
+    fig.text(0.97, outcome_legend_y, outcome_legend, ha='left', va='center', fontsize=9,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
+    
+    # Population mean label with dashed line legend
+    fig.text(0.97, 0.58, f"---- Population Mean\n      ({pop_prop_1:.1f}%)", 
+            ha='left', va='center', fontsize=9,
+            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7, edgecolor='black'))
+    
+    # Significance legend box
+    sig_text = "Significance:\n* p < 0.05 (raw)\n** p < 0.05 (FDR-corrected)"
+    fig.text(0.97, 0.46, sig_text, ha='left', va='center', fontsize=9,
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9, edgecolor='black'))
+    
+    # FRAME: Title
+    fig.suptitle(plot_title, fontsize=14, weight='bold', y=0.96)
     
     # Save
     output_path = os.path.join(output_dir, f'{variable}_bar.png')
@@ -1080,7 +1250,7 @@ def plot_cluster_lollipop(
     if results_df is not None and (pvalues_raw is None or pvalues_fdr is None):
         print("  Extracting p-values from results_df...")
         pvalues_raw, pvalues_fdr = extract_pvalues_for_lollipop(
-            results_df, variables, cluster_df, cluster_col, cluster_config_path
+            results_df, variables, cluster_df, cluster_col, cluster_config_path, name_map_path
         )
     
     # Prepare data - population is entire clustered dataset
