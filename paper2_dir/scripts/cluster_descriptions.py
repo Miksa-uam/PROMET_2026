@@ -643,7 +643,12 @@ def _plot_single_violin(
 
     # Set the location of the 'type' box, containing color codes for the split violins
     ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.95), 
-          title='Type', frameon=True, fancybox=True)
+          title='', frameon=True, fancybox=True,
+          fontsize=13, 
+          edgecolor='black',
+          facecolor='white',
+          framealpha=0.8
+          )
     
     # Get data range for violin plot
     y_max = plot_df['value'].max()
@@ -661,7 +666,7 @@ def _plot_single_violin(
     plot_title = title.format(variable=nice_name) if title else f'Distribution of {nice_name}'
     plot_ylabel = ylabel.format(variable=nice_name) if ylabel else nice_name
     
-    ax.set_ylabel(plot_ylabel, fontsize=13)
+    ax.set_ylabel(plot_ylabel, fontsize=16)
     ax.tick_params(labelsize=10)
 
     # Remove automatic x axis label
@@ -674,12 +679,11 @@ def _plot_single_violin(
     for i, row in stats_df.iterrows():
         # Convert data x-coord to figure coord
         x_fig = ax.transData.transform((i, 0))[0] / fig.dpi / fig_width
-        
-        # Statistical box above violins
-        stats_text = f"n={row['pop_n']} | n={row['cluster_n']}\nMedian: {row['pop_median']:.1f} | {row['cluster_median']:.1f}"
+
+        stats_text = f"n={row['cluster_n']}\n Median: {row['cluster_median']:.1f}"
         fig.text(x_fig, 0.87, stats_text, 
-                ha='center', va='center', fontsize=11,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='gray'))
+                ha='center', va='center', fontsize=13,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='gray'))
         
         # Significance asterisks below violins
         sig_text = ''
@@ -690,7 +694,7 @@ def _plot_single_violin(
         
         if sig_text:
             fig.text(x_fig, 0.08, sig_text, 
-                    ha='center', va='center', fontsize=13, weight='bold')
+                    ha='center', va='center', fontsize=20, weight='bold')
         
         # P-values below asterisks (NO "cluster" label)
         if row['p_raw'] is not None and pd.notna(row['p_raw']):
@@ -698,22 +702,28 @@ def _plot_single_violin(
             if row['p_fdr'] is not None and pd.notna(row['p_fdr']):
                 p_text += f"\np(FDR)={row['p_fdr']:.3f}"
             fig.text(x_fig, 0.06, p_text, 
-                    ha='center', va='top', fontsize=11, style='italic')
+                    ha='center', va='top', fontsize=12, style='italic')
         
         # Cluster labels below p-values
         fig.text(x_fig, 0.02, f"{row['cluster_label']}\n(n={row['cluster_n']})", 
-                ha='right', va='top', fontsize=13, rotation=45)
+                ha='right', va='top', fontsize=16, rotation=45)
     
     # X-axis label at outermost position (below all cluster labels)
     # fig.text(0.5, 0.001, 'cluster', ha='center', fontsize=12, weight='bold')
     
+    # Population n and median box
+    pop_stats_text = f"Population n={row['pop_n']}\nPopulation median: {row['pop_median']:.1f}"
+    fig.text(0.96, 0.87, pop_stats_text, 
+            ha='left', va='center', fontsize=13,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='gray'))
+
     # Significance legend box
     sig_legend = "Significance:\n* p < 0.05 (raw)\n** p < 0.05 (FDR-corrected)"
-    fig.text(0.96, 0.75, sig_legend, ha='left', va='center', fontsize=11,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.2, edgecolor='black'))
+    fig.text(0.96, 0.74, sig_legend, ha='left', va='center', fontsize=13,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='black'))
     
     # FRAME: Title
-    fig.suptitle(plot_title, fontsize=15, weight='bold', y=0.96)
+    fig.suptitle(plot_title, fontsize=20, weight='bold', y=0.96)
     
     # Save
     output_path = os.path.join(output_dir, f'{variable}_violin.png')
@@ -881,7 +891,16 @@ def _plot_single_stacked_bar(
     # INNERMOST LAYER: Plot bars (0-100% range ONLY)
     ax.bar(x_pos, plot_df['prop_1'], label=label_1, color=ACHIEVED_COLOR, alpha=0.8)
     ax.bar(x_pos, plot_df['prop_0'], bottom=plot_df['prop_1'], label=label_0, color=NOT_ACHIEVED_COLOR, alpha=0.8)
-    
+
+    # Display and position the bar plot legend (color codes)
+    ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.95), 
+          title='', frameon=True, fancybox=True,
+          fontsize=13, 
+          edgecolor='black',
+          facecolor='white',
+          framealpha=0.8
+          )
+
     # Population mean line
     ax.axhline(y=pop_prop_1, color='black', linestyle='--', linewidth=2, alpha=0.8)
     
@@ -894,8 +913,8 @@ def _plot_single_stacked_bar(
             elif row['p_raw'] is not None and pd.notna(row['p_raw']) and row['p_raw'] < alpha:
                 sig_text = '*'
             if sig_text:
-                ax.text(i, pop_prop_1 + 2, sig_text, ha='center', va='bottom', 
-                       fontsize=12, weight='bold')
+                ax.text(i, pop_prop_1 + 1, sig_text, ha='center', va='bottom', 
+                       fontsize=20, weight='bold')
     
     # Set axis limits STRICTLY to 0-100
     ax.set_ylim(0, 100)
@@ -910,7 +929,7 @@ def _plot_single_stacked_bar(
     plot_ylabel = ylabel if ylabel else 'Percentage (%)'
     plot_xlabel = xlabel if xlabel else 'Clusters'
     
-    ax.set_ylabel(plot_ylabel, fontsize=12)
+    ax.set_ylabel(plot_ylabel, fontsize=16)
     ax.tick_params(labelsize=10)
     
     # MIDDLE LAYER: N (%) labels in figure coordinates (truly outside plot)
@@ -918,65 +937,50 @@ def _plot_single_stacked_bar(
         # Convert data coords to figure coords
         x_fig = ax.transData.transform((i, 0))[0] / fig.dpi / fig.get_size_inches()[0]
         
-        # FIXED: Top box always shows class 1 (achieved), bottom box always shows class 0 (not achieved)
+        # Top box always shows class 1 (achieved), bottom box always shows class 0 (not achieved)
         # This matches the stacking order where class 1 is at bottom, class 0 is stacked on top
         top_label = f"{row['n_0']} ({row['prop_0']:.1f}%)"
         top_color = NOT_ACHIEVED_COLOR  # Match bar color
         bottom_label = f"{row['n_1']} ({row['prop_1']:.1f}%)"
         bottom_color = ACHIEVED_COLOR  # Match bar color
-        
+
         # Top box (above plot) - corresponds to top of stacked bar (class 0)
         fig.text(x_fig, 0.87, top_label, 
-                ha='center', va='center', fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor=top_color, alpha=0.8, edgecolor='black'))
+                ha='center', va='center', fontsize=13,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=top_color, alpha=0.8, edgecolor='gray'))
         
         # Bottom box (below plot) - corresponds to bottom of stacked bar (class 1)
         fig.text(x_fig, 0.23, bottom_label, 
-                ha='center', va='center', fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor=bottom_color, alpha=0.8, edgecolor='black'))
+                ha='center', va='center', fontsize=13,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=bottom_color, alpha=0.8, edgecolor='gray'))
         
         # P-values (below bottom box)
         if row['group_id'] is not None and row['p_raw'] is not None and pd.notna(row['p_raw']):
             p_text = f"p={row['p_raw']:.3f}"
             if row['p_fdr'] is not None and pd.notna(row['p_fdr']):
                 p_text += f"\np(FDR)={row['p_fdr']:.3f}"
-            fig.text(x_fig, 0.17, p_text, ha='center', va='top', 
-                    fontsize=7, style='italic')
+            fig.text(x_fig, 0.2, p_text, ha='center', va='top', 
+                    fontsize=12, style='italic')
         
         # Cluster labels (below p-values)
-        fig.text(x_fig, 0.10, f"{row['group']}\n(n={row['n_total']})", 
-                ha='right', va='top', fontsize=9, rotation=45)
+        fig.text(x_fig, 0.15, f"{row['group']}\n(n={row['n_total']})", 
+                ha='right', va='top', fontsize=16, rotation=45)
     
     # X-axis label
-    fig.text(0.5, 0.02, plot_xlabel, ha='center', fontsize=12, weight='bold')
-    
-    # OUTER LAYER: Legend boxes on RIGHT side (in figure coordinates)
-    # Outcome legend box with COLORS
-    from matplotlib.patches import Rectangle
-    outcome_legend_y = 0.70
-    # Draw colored boxes for legend
-    fig.patches.extend([
-        Rectangle((0.955, outcome_legend_y + 0.02), 0.01, 0.02, 
-                 transform=fig.transFigure, facecolor=ACHIEVED_COLOR, edgecolor='black', alpha=0.8),
-        Rectangle((0.955, outcome_legend_y - 0.02), 0.01, 0.02, 
-                 transform=fig.transFigure, facecolor=NOT_ACHIEVED_COLOR, edgecolor='black', alpha=0.8)
-    ])
-    outcome_legend = f"  {label_1}\n  {label_0}"
-    fig.text(0.97, outcome_legend_y, outcome_legend, ha='left', va='center', fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
-    
+    # fig.text(0.5, 0.02, plot_xlabel, ha='center', fontsize=12, weight='bold')
+
     # Population mean label with dashed line legend
-    fig.text(0.97, 0.58, f"---- Population Mean\n      ({pop_prop_1:.1f}%)", 
-            ha='left', va='center', fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7, edgecolor='black'))
+    fig.text(0.96, 0.67, f"- - - - - - Population average\n            ({pop_prop_1:.1f}%)", 
+            ha='left', va='center', fontsize=13,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='black'))
     
     # Significance legend box
     sig_text = "Significance:\n* p < 0.05 (raw)\n** p < 0.05 (FDR-corrected)"
-    fig.text(0.97, 0.46, sig_text, ha='left', va='center', fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9, edgecolor='black'))
+    fig.text(0.96, 0.74, sig_text, ha='left', va='center', fontsize=13,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='black'))
     
     # FRAME: Title
-    fig.suptitle(plot_title, fontsize=14, weight='bold', y=0.96)
+    fig.suptitle(plot_title, fontsize=20, weight='bold', y=0.96)
     
     # Save
     output_path = os.path.join(output_dir, f'{variable}_bar.png')
