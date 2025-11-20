@@ -24,7 +24,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Optional, Any, Tuple
-from scipy.stats import ttest_ind, chi2_contingency, mannwhitneyu
+from scipy.stats import ttest_ind, chi2_contingency, mannwhitneyu, norm
 from statsmodels.stats.multitest import multipletests
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -402,7 +402,6 @@ def calculate_risk_metrics(
                                risk_ratio, rr_ci_lower, rr_ci_upper,
                                risk_difference, rd_ci_lower, rd_ci_upper
     """
-    from scipy.stats import norm
     
     clusters = sorted(cluster_df[cluster_col].unique())
     results = []
@@ -645,7 +644,7 @@ def _plot_single_violin(
     ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.95), 
           title='', frameon=True, fancybox=True,
           fontsize=13, 
-          edgecolor='black',
+          edgecolor='gray',
           facecolor='white',
           framealpha=0.8
           )
@@ -720,7 +719,7 @@ def _plot_single_violin(
     # Significance legend box
     sig_legend = "Significance:\n* p < 0.05 (raw)\n** p < 0.05 (FDR-corrected)"
     fig.text(0.96, 0.74, sig_legend, ha='left', va='center', fontsize=13,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='black'))
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
     
     # FRAME: Title
     fig.suptitle(plot_title, fontsize=20, weight='bold', y=0.96)
@@ -896,7 +895,7 @@ def _plot_single_stacked_bar(
     ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.95), 
           title='', frameon=True, fancybox=True,
           fontsize=13, 
-          edgecolor='black',
+          edgecolor='gray',
           facecolor='white',
           framealpha=0.8
           )
@@ -972,12 +971,12 @@ def _plot_single_stacked_bar(
     # Population mean label with dashed line legend
     fig.text(0.96, 0.67, f"- - - - - - Population average\n            ({pop_prop_1:.1f}%)", 
             ha='left', va='center', fontsize=13,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='black'))
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
     
     # Significance legend box
     sig_text = "Significance:\n* p < 0.05 (raw)\n** p < 0.05 (FDR-corrected)"
     fig.text(0.96, 0.74, sig_text, ha='left', va='center', fontsize=13,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='black'))
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
     
     # FRAME: Title
     fig.suptitle(plot_title, fontsize=20, weight='bold', y=0.96)
@@ -1779,9 +1778,10 @@ def _plot_single_forest(
     # Sort by cluster_id
     plot_data = risk_df.sort_values('cluster_id', ascending=False)
     
+    # The second subplot is an empty 'ghost plot' used only to display a right y axis with actual effect size and CI values - adjust its size accordingly 
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(14, max(6, len(plot_data) * 0.5)), 
-                                   gridspec_kw={'width_ratios': [3, 0.8], 'wspace': 0.05})
-    
+                                   gridspec_kw={'width_ratios': [3, 0.01], 'wspace': 0.01})
+
     y_pos = np.arange(len(plot_data))
     
     # Select data based on plot type
@@ -1824,7 +1824,7 @@ def _plot_single_forest(
     cluster_labels = [get_cluster_label(cid, cluster_config) for cid in plot_data['cluster_id']]
     
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(cluster_labels, fontsize=12)
+    ax.set_yticklabels(cluster_labels, fontsize=16)
     
     # Configurable labels
     if title:
@@ -1837,13 +1837,15 @@ def _plot_single_forest(
     else:
         plot_xlabel = default_xlabel
     
-    ax.set_title(plot_title, fontsize=16, weight='bold')
-    ax.set_xlabel(plot_xlabel, fontsize=14)
+    ax.set_title(plot_title, fontsize=20, weight='bold')
+    ax.set_xlabel(plot_xlabel, fontsize=16)
     ax.grid(True, axis='x', which='both', linestyle='--', linewidth=0.5, alpha=0.5)
     
     # Right y-axis with effect sizes and CIs
     ax2.set_ylim(ax.get_ylim())
     ax2.set_yticks(y_pos)
+    ax2.grid(False)  # Disable all gridlines on right subplot
+
     
     # Format CI labels
     ci_labels = []
@@ -1854,11 +1856,11 @@ def _plot_single_forest(
             label = f"RD: {row['risk_difference']*100:.1f}% [{row['rd_ci_lower']*100:.1f}-{row['rd_ci_upper']*100:.1f}%]"
         ci_labels.append(label)
     
-    ax2.set_yticklabels(ci_labels, fontsize=10, ha='left')  # Left-align to bring closer
-    ax2.set_ylabel('Effect Size [95% CI]', fontsize=12, labelpad=15)  # Add padding to ylabel
+    ax2.set_yticklabels(ci_labels, fontsize=13, ha='left')  # Left-align to bring closer
+    ax2.set_ylabel('Effect Size [95% CI]', fontsize=16, labelpad=15)  # Add padding to ylabel
     ax2.yaxis.set_label_position('right')
     ax2.yaxis.tick_right()
-    ax2.tick_params(axis='y', pad=0)  # Remove tick padding to bring labels closer
+    ax2.tick_params(axis='y', pad=0)
     ax2.set_xticks([])
     ax2.spines['left'].set_visible(False)
     ax2.spines['bottom'].set_visible(False)
