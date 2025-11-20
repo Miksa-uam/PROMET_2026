@@ -122,38 +122,64 @@ def _extract_percentage_from_table_cell(cell_value: str) -> float:
         return np.nan
 
 def _parse_cluster_column_header(header: str, cluster_config: Dict) -> Optional[int]:
-    """
-    Extract cluster ID from column header.
-    
-    Supports both new format "[Cluster Name]: Mean (±SD) / N (%)" 
-    and old format "Cluster X: Mean/N".
-    
-    Args:
-        header: Column header string
-        cluster_config: Cluster configuration dictionary
-    
-    Returns:
-        Cluster ID as integer, or None if parsing fails
-    """
-    import re
-    
-    # Try new format: "[Cluster Name]: Mean (±SD) / N (%)"
-    # Extract the label part before the colon
-    match = re.match(r'^(.+?):\s*Mean', header)
-    if match:
-        label = match.group(1).strip()
-        # Look up this label in cluster_config to find the ID
-        labels = cluster_config.get('cluster_labels', {})
-        for cluster_id_str, cluster_label in labels.items():
-            if cluster_label == label:
+
+    # Try to match against cluster labels from config (new format)
+    cluster_labels = cluster_config.get('cluster_labels', {})
+    for cluster_id_str, label in cluster_labels.items():
+        if header.startswith(f'{label}:'):
+            try:
                 return int(cluster_id_str)
+            except ValueError:
+                continue
     
-    # Fallback to old format: "Cluster X: Mean/N"
+    # Fallback to old format: "Cluster X: Mean/N" or "Cluster X: p-value"
     match = re.match(r'^Cluster\s+(\d+):', header)
     if match:
         return int(match.group(1))
     
     return None
+    
+def load_and_merge_cluster_data(
+    cluster_db_path: str,
+    main_db_path: str,
+    cluster_table: str,
+    cluster_column: str,
+    outcome_table: str
+    ) -> pd.DataFrame:
+    """
+    Convenience function to load and merge cluster data.
+    
+    Note: The "population" for comparisons is the entire clustered dataset,
+    not a separate population table.
+    
+    Returns:
+        DataFrame with cluster assignments and outcomes merged
+    """
+    print("Loading cluster data...")
+    
+    # Load cluster assignments
+    with sqlite3.connect(cluster_db_path) as conn:
+        cluster_labels = pd.read_sql_query(
+            f"SELECT medical_record_id, {cluster_column} as cluster_id FROM {cluster_table}",
+            conn
+        )
+    
+    print(f"  ✓ Loaded {len(cluster_labels)} cluster assignments")
+    
+    # Load outcome data
+    with sqlite3.connect(main_db_path) as conn:
+        outcome_df = pd.read_sql_query(f"SELECT * FROM {outcome_table}", conn)
+    
+    print(f"  ✓ Loaded {len(outcome_df)} outcome records")
+    
+    # Merge
+    cluster_df = outcome_df.merge(cluster_labels, on='medical_record_id', how='inner')
+    
+    print(f"  ✓ Merged: {len(cluster_df)} records with clusters")
+    print(f"  ✓ Clusters: {sorted(cluster_df['cluster_id'].unique())}")
+    print(f"  ✓ Population for comparisons: entire clustered dataset (n={len(cluster_df)})")
+    
+    return cluster_df
 
 # =============================================================================
 # HELPER FUNCTIONS - Statistical Testing
@@ -452,6 +478,219 @@ def calculate_risk_metrics(
         })
     
     return pd.DataFrame(results)
+
+# =============================================================================
+# STATISTICAL ANALYSIS FUNCTIONS
+# =============================================================================
+
+def analyze_cluster_vs_population(
+    cluster_df: pd.DataFrame,
+    variables: List[str],
+    output_db_path: str,
+    output_table_name: str,
+    cluster_col: str = 'cluster_id',
+    name_map_path: str = 'human_readable_variable_names.json',
+    cluster_config_path: str = 'cluster_config.json',
+    variable_types: Optional[Dict[str, str]] = None,
+    fdr_correction: bool = True,
+    alpha: float = 0.05
+    ) -> pd.DataFrame:
+    """
+    Analyze WGC prevalence across clusters vs entire clustered population mean.
+    Generates both detailed and publication-ready tables.
+    
+    IMPORTANT: Each cluster is compared to the ENTIRE clustered population (all clusters combined),
+    not to an external population.
+    
+    Statistical Test Selection:
+        - Continuous variables (>10 unique values): Mann-Whitney U test
+        - Categorical variables (≤10 unique values): Chi-squared test (with Fisher's exact fallback)
+        - Test selection is automatic when variable_types is None, or explicit when provided
+    
+    Args:
+        cluster_df: DataFrame with cluster assignments and WGC variables
+        variables: List of variables to analyze
+        output_db_path: Path to output database
+        output_table_name: Base name for output tables
+        cluster_col: Column name for cluster IDs
+        name_map_path: Path to variable name mappings
+        cluster_config_path: Path to cluster configuration (default: 'cluster_config.json')
+        variable_types: Optional dict mapping variable names to 'continuous' or 'categorical'.
+                       If None, types will be inferred automatically using _infer_variable_type().
+                       Example: {'age': 'continuous', 'bmi': 'continuous', 'wgc_medication': 'categorical'}
+        fdr_correction: Whether to apply FDR correction (Benjamini-Hochberg method)
+        alpha: Significance threshold for marking results (default: 0.05)
+    
+    Returns:
+        DataFrame with analysis results including:
+            - Population mean/N for each variable
+            - Cluster-specific mean/N for each variable
+            - Raw p-values for each cluster comparison
+            - FDR-corrected p-values (if fdr_correction=True)
+            - FDR columns are positioned immediately after their corresponding raw p-value columns
+    
+    Notes:
+        - When variable_types is None, a warning is printed and types are inferred
+        - Test selection is logged for each variable during processing
+        - Results are saved to two tables: detailed (with p-values) and publication-ready (with asterisks)
+    """
+    print("\n" + "="*60)
+    print("STATISTICAL ANALYSIS: Cluster vs Clustered Population Mean")
+    print("="*60)
+    print("Note: Each cluster compared to entire clustered population")
+    print("="*60)
+    
+    name_map = load_name_map(name_map_path)
+    cluster_config = load_cluster_config(cluster_config_path)
+    clusters = sorted(cluster_df[cluster_col].unique())
+    
+    # Infer variable types if not provided
+    if variable_types is None:
+        print("  ⚠️ No variable types provided, inferring from data...")
+        variable_types = {}
+        for variable in variables:
+            if variable in cluster_df.columns:
+                variable_types[variable] = _infer_variable_type(cluster_df[variable])
+                print(f"    {variable}: {variable_types[variable]}")
+    
+    # Build results table
+    results = []
+    
+    # N row - population is the entire clustered dataset
+    n_row = {'Variable': 'N', 'Whole population: Mean (±SD) / N (%)': len(cluster_df)}
+    for cluster_id in clusters:
+        cluster_label = get_cluster_label(cluster_id, cluster_config)
+        n_row[f'{cluster_label}: Mean (±SD) / N (%)'] = len(cluster_df[cluster_df[cluster_col] == cluster_id])
+        n_row[f'{cluster_label}: p-value'] = 'N/A'
+    results.append(n_row)
+    
+    # Process each variable
+    for variable in variables:
+        if variable not in cluster_df.columns:
+            print(f"  ⚠️ Variable '{variable}' not found. Skipping.")
+            continue
+        
+        print(f"  Processing: {variable}")
+        
+        # Use human-readable variable name for display ONLY
+        row = {'Variable': get_nice_name(variable, name_map)}
+        
+        # Get variable type
+        var_type = variable_types.get(variable, 'categorical')
+        
+        # Format population data based on type
+        if var_type == 'continuous':
+            pop_mean = cluster_df[variable].mean()
+            pop_sd = cluster_df[variable].std()
+            row['Whole population: Mean (±SD) / N (%)'] = f"{pop_mean:.2f} (±{pop_sd:.2f})"
+        else:  # categorical
+            pop_mean = cluster_df[variable].mean() * 100
+            pop_n = cluster_df[variable].sum()
+            row['Whole population: Mean (±SD) / N (%)'] = f"{int(pop_n)} ({pop_mean:.1f}%)"
+        
+        # Each cluster
+        for cluster_id in clusters:
+            cluster_label = get_cluster_label(cluster_id, cluster_config)
+            cluster_subset = cluster_df[cluster_df[cluster_col] == cluster_id]
+            
+            # Format cluster data based on type
+            if var_type == 'continuous':
+                cluster_mean = cluster_subset[variable].mean()
+                cluster_sd = cluster_subset[variable].std()
+                row[f'{cluster_label}: Mean (±SD) / N (%)'] = f"{cluster_mean:.2f} (±{cluster_sd:.2f})"
+                print(f"    Using Mann-Whitney U test (continuous) for cluster {cluster_id}")
+                p_val = mann_whitney_u_test(cluster_subset[variable], cluster_df[variable])
+            else:  # categorical
+                cluster_mean = cluster_subset[variable].mean() * 100
+                cluster_n = cluster_subset[variable].sum()
+                row[f'{cluster_label}: Mean (±SD) / N (%)'] = f"{int(cluster_n)} ({cluster_mean:.1f}%)"
+                print(f"    Using chi-squared test (categorical) for cluster {cluster_id}")
+                p_val = chi_squared_test(cluster_subset[variable], cluster_df[variable])
+            
+            row[f'{cluster_label}: p-value'] = p_val
+        
+        results.append(row)
+    
+    results_df = pd.DataFrame(results)
+    
+    # Apply FDR correction with dynamic column insertion
+    if fdr_correction:
+        print("  Applying FDR correction...")
+        p_cols = [col for col in results_df.columns if 'p-value' in col and 'FDR' not in col]
+        
+        # Build new column order list that inserts FDR columns immediately after raw p-value columns
+        new_columns = []
+        for col in results_df.columns:
+            new_columns.append(col)
+            # If this is a raw p-value column, insert FDR column after it
+            if col in p_cols:
+                # Extract valid p-values
+                pvals = pd.to_numeric(results_df[col], errors='coerce')
+                valid_mask = pvals.notna() & (pvals != 'N/A')
+                
+                if valid_mask.sum() > 0:
+                    valid_pvals = pvals[valid_mask]
+                    _, corrected, _, _ = multipletests(valid_pvals, method='fdr_bh')
+                    
+                    # Create FDR column
+                    fdr_col = col.replace('p-value', 'p-value (FDR-corrected)')
+                    results_df[fdr_col] = np.nan
+                    results_df.loc[valid_mask, fdr_col] = corrected
+                    new_columns.append(fdr_col)
+        
+        # Reorder DataFrame columns
+        results_df = results_df[new_columns]
+    
+    # Save detailed table
+    detailed_table = f"{output_table_name}_detailed"
+    with sqlite3.connect(output_db_path) as conn:
+        results_df.to_sql(detailed_table, conn, if_exists='replace', index=False)
+    print(f"  ✓ Detailed table saved: {detailed_table}")
+    
+    # Create publication-ready table (with asterisks)
+    pub_df = results_df.copy()
+    data_cols = [col for col in pub_df.columns if ': Mean (±SD) / N (%)' in col and 'Whole population' not in col]
+    p_cols = [col for col in pub_df.columns if 'p-value' in col]
+    
+    for data_col in data_cols:
+        # Extract cluster label (everything before ": Mean")
+        cluster_label = data_col.split(': Mean')[0]
+        raw_p_col = f'{cluster_label}: p-value'
+        fdr_p_col = f'{cluster_label}: p-value (FDR-corrected)'
+        
+        if raw_p_col in pub_df.columns:
+            raw_p = pd.to_numeric(pub_df[raw_p_col], errors='coerce')
+            fdr_p = pd.to_numeric(pub_df[fdr_p_col], errors='coerce') if fdr_p_col in pub_df.columns else pd.Series([np.nan] * len(pub_df))
+            
+            # Add asterisks based on significance
+            for idx in pub_df.index:
+                if pd.notna(fdr_p.iloc[idx]) and fdr_p.iloc[idx] < alpha:
+                    pub_df.at[idx, data_col] = str(pub_df.at[idx, data_col]) + '**'
+                elif pd.notna(raw_p.iloc[idx]) and raw_p.iloc[idx] < alpha:
+                    pub_df.at[idx, data_col] = str(pub_df.at[idx, data_col]) + '*'
+    
+    # Drop p-value columns
+    pub_df = pub_df.drop(columns=p_cols, errors='ignore')
+    
+    # Save publication table
+    with sqlite3.connect(output_db_path) as conn:
+        pub_df.to_sql(output_table_name, conn, if_exists='replace', index=False)
+    print(f"  ✓ Publication table saved: {output_table_name}")
+    
+    print("="*60)
+    
+    # Display DataFrame with pandas display options configured for wide tables
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', None)
+    pd.set_option('display.max_colwidth', None)
+    print("\n" + "="*80)
+    print("RESULTS TABLE (Detailed)")
+    print("="*80)
+    print(results_df.to_string(index=False))
+    print("="*80 + "\n")
+    
+    return results_df
+
 
 # =============================================================================
 # VISUALIZATION FUNCTIONS
@@ -987,223 +1226,6 @@ def _plot_single_stacked_bar(
     plt.show()
     plt.close()
 
-# =============================================================================
-# STATISTICAL ANALYSIS FUNCTIONS
-# =============================================================================
-
-def analyze_cluster_vs_population(
-    cluster_df: pd.DataFrame,
-    variables: List[str],
-    output_db_path: str,
-    output_table_name: str,
-    cluster_col: str = 'cluster_id',
-    name_map_path: str = 'human_readable_variable_names.json',
-    cluster_config_path: str = 'cluster_config.json',
-    variable_types: Optional[Dict[str, str]] = None,
-    fdr_correction: bool = True,
-    alpha: float = 0.05
-    ) -> pd.DataFrame:
-    """
-    Analyze WGC prevalence across clusters vs entire clustered population mean.
-    Generates both detailed and publication-ready tables.
-    
-    IMPORTANT: Each cluster is compared to the ENTIRE clustered population (all clusters combined),
-    not to an external population.
-    
-    Statistical Test Selection:
-        - Continuous variables (>10 unique values): Mann-Whitney U test
-        - Categorical variables (≤10 unique values): Chi-squared test (with Fisher's exact fallback)
-        - Test selection is automatic when variable_types is None, or explicit when provided
-    
-    Args:
-        cluster_df: DataFrame with cluster assignments and WGC variables
-        variables: List of variables to analyze
-        output_db_path: Path to output database
-        output_table_name: Base name for output tables
-        cluster_col: Column name for cluster IDs
-        name_map_path: Path to variable name mappings
-        cluster_config_path: Path to cluster configuration (default: 'cluster_config.json')
-        variable_types: Optional dict mapping variable names to 'continuous' or 'categorical'.
-                       If None, types will be inferred automatically using _infer_variable_type().
-                       Example: {'age': 'continuous', 'bmi': 'continuous', 'wgc_medication': 'categorical'}
-        fdr_correction: Whether to apply FDR correction (Benjamini-Hochberg method)
-        alpha: Significance threshold for marking results (default: 0.05)
-    
-    Returns:
-        DataFrame with analysis results including:
-            - Population mean/N for each variable
-            - Cluster-specific mean/N for each variable
-            - Raw p-values for each cluster comparison
-            - FDR-corrected p-values (if fdr_correction=True)
-            - FDR columns are positioned immediately after their corresponding raw p-value columns
-    
-    Notes:
-        - When variable_types is None, a warning is printed and types are inferred
-        - Test selection is logged for each variable during processing
-        - Results are saved to two tables: detailed (with p-values) and publication-ready (with asterisks)
-    """
-    print("\n" + "="*60)
-    print("STATISTICAL ANALYSIS: Cluster vs Clustered Population Mean")
-    print("="*60)
-    print("Note: Each cluster compared to entire clustered population")
-    print("="*60)
-    
-    name_map = load_name_map(name_map_path)
-    cluster_config = load_cluster_config(cluster_config_path)
-    clusters = sorted(cluster_df[cluster_col].unique())
-    
-    # Infer variable types if not provided
-    if variable_types is None:
-        print("  ⚠️ No variable types provided, inferring from data...")
-        variable_types = {}
-        for variable in variables:
-            if variable in cluster_df.columns:
-                variable_types[variable] = _infer_variable_type(cluster_df[variable])
-                print(f"    {variable}: {variable_types[variable]}")
-    
-    # Build results table
-    results = []
-    
-    # N row - population is the entire clustered dataset
-    n_row = {'Variable': 'N', 'Whole population: Mean (±SD) / N (%)': len(cluster_df)}
-    for cluster_id in clusters:
-        cluster_label = get_cluster_label(cluster_id, cluster_config)
-        n_row[f'{cluster_label}: Mean (±SD) / N (%)'] = len(cluster_df[cluster_df[cluster_col] == cluster_id])
-        n_row[f'{cluster_label}: p-value'] = 'N/A'
-    results.append(n_row)
-    
-    # Process each variable
-    for variable in variables:
-        if variable not in cluster_df.columns:
-            print(f"  ⚠️ Variable '{variable}' not found. Skipping.")
-            continue
-        
-        print(f"  Processing: {variable}")
-        
-        # Use human-readable variable name for display ONLY
-        row = {'Variable': get_nice_name(variable, name_map)}
-        
-        # Get variable type
-        var_type = variable_types.get(variable, 'categorical')
-        
-        # Format population data based on type
-        if var_type == 'continuous':
-            pop_mean = cluster_df[variable].mean()
-            pop_sd = cluster_df[variable].std()
-            row['Whole population: Mean (±SD) / N (%)'] = f"{pop_mean:.2f} (±{pop_sd:.2f})"
-        else:  # categorical
-            pop_mean = cluster_df[variable].mean() * 100
-            pop_n = cluster_df[variable].sum()
-            row['Whole population: Mean (±SD) / N (%)'] = f"{int(pop_n)} ({pop_mean:.1f}%)"
-        
-        # Each cluster
-        for cluster_id in clusters:
-            cluster_label = get_cluster_label(cluster_id, cluster_config)
-            cluster_subset = cluster_df[cluster_df[cluster_col] == cluster_id]
-            
-            # Format cluster data based on type
-            if var_type == 'continuous':
-                cluster_mean = cluster_subset[variable].mean()
-                cluster_sd = cluster_subset[variable].std()
-                row[f'{cluster_label}: Mean (±SD) / N (%)'] = f"{cluster_mean:.2f} (±{cluster_sd:.2f})"
-                print(f"    Using Mann-Whitney U test (continuous) for cluster {cluster_id}")
-                p_val = mann_whitney_u_test(cluster_subset[variable], cluster_df[variable])
-            else:  # categorical
-                cluster_mean = cluster_subset[variable].mean() * 100
-                cluster_n = cluster_subset[variable].sum()
-                row[f'{cluster_label}: Mean (±SD) / N (%)'] = f"{int(cluster_n)} ({cluster_mean:.1f}%)"
-                print(f"    Using chi-squared test (categorical) for cluster {cluster_id}")
-                p_val = chi_squared_test(cluster_subset[variable], cluster_df[variable])
-            
-            row[f'{cluster_label}: p-value'] = p_val
-        
-        results.append(row)
-    
-    results_df = pd.DataFrame(results)
-    
-    # Apply FDR correction with dynamic column insertion
-    if fdr_correction:
-        print("  Applying FDR correction...")
-        p_cols = [col for col in results_df.columns if 'p-value' in col and 'FDR' not in col]
-        
-        # Build new column order list that inserts FDR columns immediately after raw p-value columns
-        new_columns = []
-        for col in results_df.columns:
-            new_columns.append(col)
-            # If this is a raw p-value column, insert FDR column after it
-            if col in p_cols:
-                # Extract valid p-values
-                pvals = pd.to_numeric(results_df[col], errors='coerce')
-                valid_mask = pvals.notna() & (pvals != 'N/A')
-                
-                if valid_mask.sum() > 0:
-                    valid_pvals = pvals[valid_mask]
-                    _, corrected, _, _ = multipletests(valid_pvals, method='fdr_bh')
-                    
-                    # Create FDR column
-                    fdr_col = col.replace('p-value', 'p-value (FDR-corrected)')
-                    results_df[fdr_col] = np.nan
-                    results_df.loc[valid_mask, fdr_col] = corrected
-                    new_columns.append(fdr_col)
-        
-        # Reorder DataFrame columns
-        results_df = results_df[new_columns]
-    
-    # Save detailed table
-    detailed_table = f"{output_table_name}_detailed"
-    with sqlite3.connect(output_db_path) as conn:
-        results_df.to_sql(detailed_table, conn, if_exists='replace', index=False)
-    print(f"  ✓ Detailed table saved: {detailed_table}")
-    
-    # Create publication-ready table (with asterisks)
-    pub_df = results_df.copy()
-    data_cols = [col for col in pub_df.columns if ': Mean (±SD) / N (%)' in col and 'Whole population' not in col]
-    p_cols = [col for col in pub_df.columns if 'p-value' in col]
-    
-    for data_col in data_cols:
-        # Extract cluster label (everything before ": Mean")
-        cluster_label = data_col.split(': Mean')[0]
-        raw_p_col = f'{cluster_label}: p-value'
-        fdr_p_col = f'{cluster_label}: p-value (FDR-corrected)'
-        
-        if raw_p_col in pub_df.columns:
-            raw_p = pd.to_numeric(pub_df[raw_p_col], errors='coerce')
-            fdr_p = pd.to_numeric(pub_df[fdr_p_col], errors='coerce') if fdr_p_col in pub_df.columns else pd.Series([np.nan] * len(pub_df))
-            
-            # Add asterisks based on significance
-            for idx in pub_df.index:
-                if pd.notna(fdr_p.iloc[idx]) and fdr_p.iloc[idx] < alpha:
-                    pub_df.at[idx, data_col] = str(pub_df.at[idx, data_col]) + '**'
-                elif pd.notna(raw_p.iloc[idx]) and raw_p.iloc[idx] < alpha:
-                    pub_df.at[idx, data_col] = str(pub_df.at[idx, data_col]) + '*'
-    
-    # Drop p-value columns
-    pub_df = pub_df.drop(columns=p_cols, errors='ignore')
-    
-    # Save publication table
-    with sqlite3.connect(output_db_path) as conn:
-        pub_df.to_sql(output_table_name, conn, if_exists='replace', index=False)
-    print(f"  ✓ Publication table saved: {output_table_name}")
-    
-    print("="*60)
-    
-    # Display DataFrame with pandas display options configured for wide tables
-    pd.set_option('display.max_columns', None)
-    pd.set_option('display.width', None)
-    pd.set_option('display.max_colwidth', None)
-    print("\n" + "="*80)
-    print("RESULTS TABLE (Detailed)")
-    print("="*80)
-    print(results_df.to_string(index=False))
-    print("="*80 + "\n")
-    
-    return results_df
-
-
-# =============================================================================
-# ADDITIONAL VISUALIZATION FUNCTIONS
-# =============================================================================
-
 def plot_cluster_lollipop(
     cluster_df: pd.DataFrame,
     variables: List[str],
@@ -1353,7 +1375,7 @@ def plot_cluster_lollipop(
             ax.axhline(y=y_pos - 0.75, color='grey', linestyle='-', linewidth=2.0)
     
     ax.set_yticks(y_ticks)
-    ax.set_yticklabels(y_tick_labels, fontsize=12)
+    ax.set_yticklabels(y_tick_labels, fontsize=15)
     ax.invert_yaxis()
     
     ax.axvline(x=0, color='black', linestyle='-', linewidth=1)
@@ -1362,24 +1384,35 @@ def plot_cluster_lollipop(
     if title:
         plot_title = title
     else:
-        plot_title = 'Multi-Cluster Comparison: Percent Change vs Population Mean'
+        plot_title = 'Cluster-wise deviations from the population mean'
     
     if xlabel:
         plot_xlabel = xlabel
     else:
-        plot_xlabel = 'Percent Change vs Population Mean (%)'
+        plot_xlabel = 'Percent change: differences from population mean (%)'
     
-    ax.set_title(plot_title, fontsize=16, weight='bold')
-    ax.set_xlabel(plot_xlabel, fontsize=14)
+    ax.set_title(plot_title, fontsize=20, weight='bold')
+    ax.set_xlabel(plot_xlabel, fontsize=15)
     ax.grid(True, axis='x', which='both', linestyle='--', linewidth=0.5)
     
     # Legend
     legend_elements = [
         plt.Line2D([0], [0], marker='o', color=cluster_colors[cluster]['color'],
-                  label=cluster_colors[cluster]['label'], linestyle='None', markersize=8)
+                  label=cluster_colors[cluster]['label'], linestyle='None', markersize=10, 
+                  )
         for cluster in clusters_in_data
     ]
-    ax.legend(handles=legend_elements, title='Clusters', bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.legend(handles=legend_elements, 
+        bbox_to_anchor=(1.0, 1.0), 
+        loc='upper left', 
+        title='Cluster', 
+        title_fontsize=15,
+        fontsize=13, 
+        frameon=True, fancybox=True,
+        edgecolor='gray',
+        facecolor='white',
+        framealpha=0.8
+    )
     
     # Save
     output_path = os.path.join(output_dir, output_filename)
@@ -1387,24 +1420,6 @@ def plot_cluster_lollipop(
     plt.show()
     plt.close()
     print(f"  ✓ Lollipop plot saved: {output_path}")
-
-def _parse_cluster_column_header(header: str, cluster_config: Dict) -> Optional[int]:
-
-    # Try to match against cluster labels from config (new format)
-    cluster_labels = cluster_config.get('cluster_labels', {})
-    for cluster_id_str, label in cluster_labels.items():
-        if header.startswith(f'{label}:'):
-            try:
-                return int(cluster_id_str)
-            except ValueError:
-                continue
-    
-    # Fallback to old format: "Cluster X: Mean/N" or "Cluster X: p-value"
-    match = re.match(r'^Cluster\s+(\d+):', header)
-    if match:
-        return int(match.group(1))
-    
-    return None
 
 def plot_cluster_heatmap(
     results_df: pd.DataFrame,
@@ -1633,7 +1648,7 @@ def plot_cluster_heatmap(
                 ax.text(0, i, text, ha='center', va='center', fontsize=10)
         
         # Add column label at bottom, rotated and centered
-        ax.set_xlabel(cluster_labels[j], fontsize=10, rotation=45, ha='right')
+        ax.set_xlabel(cluster_labels[j], fontsize=13, rotation=45, ha='right')
         
         # Configure axes - remove all ticks and gridlines
         ax.set_xticks([])
@@ -1642,7 +1657,7 @@ def plot_cluster_heatmap(
         
         # Add row labels to leftmost axis only, with rotation
         if j == 0:
-            ax.set_yticklabels(wgc_labels, fontsize=10, rotation=0, ha='right')
+            ax.set_yticklabels(wgc_labels, fontsize=13, rotation=0, ha='right')
         else:
             ax.set_yticklabels([])
         
@@ -1672,18 +1687,18 @@ def plot_cluster_heatmap(
     if ylabel:
         plot_ylabel = ylabel
     else:
-        plot_ylabel = 'Weight Gain Causes'
+        plot_ylabel = '' # 'Weight Gain Causes'
 
     if xlabel:
         plot_xlabel = xlabel
     else:
-        plot_xlabel = 'Clusters'
+        plot_xlabel = '' #'Clusters'
     
     # Add overall title
     fig.suptitle(plot_title, fontsize=16, weight='bold', y=0.96)
     
     # Add y-axis label further to the left to avoid overlap with rotated variable labels
-    fig.text(0.0001, 0.5, plot_ylabel, fontsize=14, rotation=90, va='center', ha='center')
+    fig.text(0.00001, 0.5, plot_ylabel, fontsize=13, rotation=90, va='center', ha='left')
     
     # Save
     output_path = os.path.join(output_dir, output_filename)
@@ -1874,48 +1889,3 @@ def _plot_single_forest(
     plt.show()
     plt.close()
 
-# =============================================================================
-# CONVENIENCE FUNCTIONS
-# =============================================================================
-
-def load_and_merge_cluster_data(
-    cluster_db_path: str,
-    main_db_path: str,
-    cluster_table: str,
-    cluster_column: str,
-    outcome_table: str
-    ) -> pd.DataFrame:
-    """
-    Convenience function to load and merge cluster data.
-    
-    Note: The "population" for comparisons is the entire clustered dataset,
-    not a separate population table.
-    
-    Returns:
-        DataFrame with cluster assignments and outcomes merged
-    """
-    print("Loading cluster data...")
-    
-    # Load cluster assignments
-    with sqlite3.connect(cluster_db_path) as conn:
-        cluster_labels = pd.read_sql_query(
-            f"SELECT medical_record_id, {cluster_column} as cluster_id FROM {cluster_table}",
-            conn
-        )
-    
-    print(f"  ✓ Loaded {len(cluster_labels)} cluster assignments")
-    
-    # Load outcome data
-    with sqlite3.connect(main_db_path) as conn:
-        outcome_df = pd.read_sql_query(f"SELECT * FROM {outcome_table}", conn)
-    
-    print(f"  ✓ Loaded {len(outcome_df)} outcome records")
-    
-    # Merge
-    cluster_df = outcome_df.merge(cluster_labels, on='medical_record_id', how='inner')
-    
-    print(f"  ✓ Merged: {len(cluster_df)} records with clusters")
-    print(f"  ✓ Clusters: {sorted(cluster_df['cluster_id'].unique())}")
-    print(f"  ✓ Population for comparisons: entire clustered dataset (n={len(cluster_df)})")
-    
-    return cluster_df
