@@ -87,7 +87,7 @@ class RandomForestAnalyzer:
         # Color schemes for visualizations
         self.colors = {
             'gini': '#2E86AB',
-            'permutation': '#A23B72', 
+            'permutation': '#A23B72',
             'shap_bar': '#F18F01',
             'shap_beeswarm': None,  # Use SHAP default colormap
             'significance_line': '#E63946',
@@ -558,73 +558,62 @@ class RandomForestAnalyzer:
     # REMOVED: _add_significance_threshold_line method - no longer needed
     # Significance is now indicated only through asterisks and colors
 
-    def _create_gini_importance_panel(self, ax, gini_importance: pd.Series, 
-                                    significance_results: SignificanceResults = None) -> None:
-        """Create Gini importance panel with significance testing."""
+    def _plot_gini_importance(self, gini_importance: pd.Series, 
+                             significance_results: SignificanceResults = None) -> None:
+        """Create standalone Gini importance plot."""
         try:
-            # Step 1: Order features by importance (descending) - use original snake_case names
-            importance_items = sorted(gini_importance.items(), key=lambda x: x[1], reverse=True)
+            # Order features by importance (ascending for bottom-to-top display)
+            importance_items = sorted(gini_importance.items(), key=lambda x: x[1], reverse=False)
             ordered_snake_case_names = [name for name, _ in importance_items]
             ordered_values = [value for _, value in importance_items]
-            
-            # Step 2: Create nice labels for display ONLY
             nice_labels = [self._get_nice_name(name) for name in ordered_snake_case_names]
             
-            # Step 3: Create plot with nice labels for display (adjusted for longer labels)
+            # Create figure
+            fig_width, fig_height = self._calculate_figure_dimensions(len(ordered_snake_case_names))
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            
+            # Create bar plot (most important at top)
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['gini'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=8, ha='right')  # EXACT MATCH to secondary plot
-            ax.set_xlabel('Gini Importance (Mean Decrease in Impurity)', fontsize=10)  # EXACT MATCH
-            ax.set_title('Gini Feature Importance', fontsize=11, fontweight='bold')  # EXACT MATCH
-            
-            # Adjust margins to accommodate longer labels
-            ax.margins(y=0.01)  # Tighter vertical margins
-            
-            # Step 4: Add significance annotations - use original names for logic
-            print(f"DEBUG GINI: Checking significance results...")
-            print(f"DEBUG GINI: significance_results exists = {significance_results is not None}")
-            if significance_results:
-                print(f"DEBUG GINI: gini_significant_features = {significance_results.gini_significant_features}")
-                print(f"DEBUG GINI: len(gini_significant_features) = {len(significance_results.gini_significant_features)}")
-                
-                if significance_results.gini_significant_features:
-                    print(f"DEBUG GINI: About to call _add_significance_annotations")
-                    print(f"DEBUG GINI: ordered_snake_case_names = {ordered_snake_case_names}")
-                    self._add_significance_annotations(
-                        ax, ordered_snake_case_names, significance_results.gini_significant_features
-                    )
-                else:
-                    print(f"DEBUG GINI: No significant features to annotate")
-                
-                # REMOVED: Threshold line removed as requested - significance shown only via asterisks and colors
-                print(f"DEBUG GINI: Threshold line removed - using only asterisks and colors for significance")
-            else:
-                print(f"DEBUG GINI: No significance results available")
-            
-            ax.grid(True, alpha=0.3)
+            ax.set_yticklabels(nice_labels, fontsize=10, ha='right')
+            ax.set_xlabel('Gini Importance (Mean Decrease in Impurity)', fontsize=11)
+            ax.set_title(f'Gini Feature Importance: {self.config.analysis_name}', 
+                        fontsize=12, fontweight='bold')
+            ax.margins(y=0.01)
+            ax.grid(True, alpha=0.3, axis='x')
             ax.set_axisbelow(True)
             
+            # Add significance annotations
+            if significance_results and significance_results.gini_significant_features:
+                self._add_significance_annotations(
+                    ax, ordered_snake_case_names, significance_results.gini_significant_features
+                )
+            
+            plt.tight_layout()
+            output_path = os.path.join(self.config.output_dir, 
+                                      f"{self.config.analysis_name}_gini_importance.png")
+            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+            print(f"Gini importance plot saved to: {output_path}")
+            plt.show()
+            
         except Exception as e:
-            print(f"ERROR: Failed to create Gini importance panel: {str(e)}")
+            print(f"ERROR: Failed to create Gini importance plot: {str(e)}")
             import traceback
             traceback.print_exc()
-            ax.text(0.5, 0.5, 'Error creating Gini plot', ha='center', va='center', transform=ax.transAxes)
 
-    def _create_shap_beeswarm_panel(self, ax, shap_explanation, 
-                                  significance_results: SignificanceResults = None) -> None:
-        """Create SHAP beeswarm panel with significance annotations."""
+    def _plot_shap_beeswarm(self, shap_explanation, 
+                           significance_results: SignificanceResults = None) -> None:
+        """Create standalone SHAP beeswarm plot."""
         try:
-            plt.sca(ax)  # Set current axis for SHAP
-            
-            # Step 1: Order features by mean absolute SHAP values - use original names
+            # Order features by mean absolute SHAP values (ascending for bottom-to-top display)
             mean_abs_shap = np.mean(np.abs(shap_explanation.values), axis=0)
             shap_items = sorted(zip(shap_explanation.feature_names, mean_abs_shap), 
-                               key=lambda x: x[1], reverse=True)
+                               key=lambda x: x[1], reverse=False)
             ordered_snake_case_names = [name for name, _ in shap_items]
             feature_order_indices = [shap_explanation.feature_names.index(name) for name in ordered_snake_case_names]
             
-            # Step 2: Create ordered explanation with nice names for display
+            # Create ordered explanation with nice names
             ordered_explanation = shap.Explanation(
                 values=shap_explanation.values[:, feature_order_indices],
                 base_values=shap_explanation.base_values,
@@ -632,194 +621,143 @@ class RandomForestAnalyzer:
                 feature_names=[self._get_nice_name(name) for name in ordered_snake_case_names]
             )
             
-            # Step 3: Create beeswarm plot with adjustments for longer labels
+            # Create figure
+            fig_width, fig_height = self._calculate_figure_dimensions(len(ordered_snake_case_names))
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            plt.sca(ax)
+            
+            # Create beeswarm plot (most important at top)
             shap.plots.beeswarm(ordered_explanation, 
                                max_display=self.config.max_features_display or len(shap_explanation.feature_names),
                                show=False)
-            ax.set_title('SHAP Value Distribution', fontsize=11, fontweight='bold')  # EXACT MATCH to secondary
             
-            # EXACT MATCH to secondary plot settings
-            ax.tick_params(axis='y', labelsize=8)
-            ax.margins(y=0.01)  # Tighter vertical margins
+            ax.set_title(f'SHAP Value Distribution: {self.config.analysis_name}', 
+                        fontsize=12, fontweight='bold')
+            ax.tick_params(axis='y', labelsize=10)
+            ax.margins(y=0.01)
             
-            # Step 4: CRITICAL FIX - Get the actual order from the plot after SHAP creates it
+            # Add significance annotations
             if significance_results and significance_results.shap_significant_features:
-                # Get the current labels from the plot (these are the nice names in the order SHAP created them)
                 current_labels = [label.get_text() for label in ax.get_yticklabels()]
-                
-                # Create reverse mapping from nice names back to snake_case names
                 nice_to_snake = {self._get_nice_name(snake): snake for snake in ordered_snake_case_names}
+                plot_ordered_snake_names = [nice_to_snake.get(label, label) for label in current_labels]
                 
-                # Get the snake_case names in the order they appear on the plot
-                plot_ordered_snake_names = []
-                for nice_label in current_labels:
-                    if nice_label in nice_to_snake:
-                        plot_ordered_snake_names.append(nice_to_snake[nice_label])
-                    else:
-                        print(f"WARNING: Could not find snake_case name for label '{nice_label}'")
-                        # Try to find a partial match
-                        for snake, nice in [(s, self._get_nice_name(s)) for s in ordered_snake_case_names]:
-                            if nice_label in nice or nice in nice_label:
-                                plot_ordered_snake_names.append(snake)
-                                print(f"  Found partial match: '{nice_label}' -> '{snake}'")
-                                break
-                        else:
-                            print(f"  No match found for '{nice_label}', skipping")
-                
-                print(f"DEBUG SHAP: Plot order snake_case names: {plot_ordered_snake_names}")
-                print(f"DEBUG SHAP: Plot labels: {current_labels}")
-                
-                # Now use the correct order for annotations
                 self._add_significance_annotations(
                     ax, plot_ordered_snake_names, significance_results.shap_significant_features
                 )
             
+            plt.tight_layout()
+            output_path = os.path.join(self.config.output_dir, 
+                                      f"{self.config.analysis_name}_shap_beeswarm.png")
+            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+            print(f"SHAP beeswarm plot saved to: {output_path}")
+            plt.show()
+            
         except Exception as e:
-            logger.error(f"Failed to create SHAP beeswarm panel: {str(e)}")
+            print(f"ERROR: Failed to create SHAP beeswarm plot: {str(e)}")
             import traceback
             traceback.print_exc()
-            ax.text(0.5, 0.5, 'Error creating SHAP beeswarm plot', ha='center', va='center', transform=ax.transAxes)
 
-    def _create_mean_shap_panel(self, ax, shap_explanation) -> None:
-        """Create mean absolute SHAP values panel."""
+    def _plot_mean_shap(self, shap_explanation) -> None:
+        """Create standalone mean absolute SHAP values plot."""
         try:
-            # Order by mean absolute SHAP values - use original names internally
+            # Order by mean absolute SHAP values (ascending for bottom-to-top display)
             mean_abs_shap = np.mean(np.abs(shap_explanation.values), axis=0)
             shap_items = sorted(zip(shap_explanation.feature_names, mean_abs_shap), 
-                               key=lambda x: x[1], reverse=True)
+                               key=lambda x: x[1], reverse=False)
             ordered_snake_case_names = [name for name, _ in shap_items]
             ordered_values = [value for _, value in shap_items]
-            
-            # Create nice labels for display
             nice_labels = [self._get_nice_name(name) for name in ordered_snake_case_names]
             
-            # Create plot with adjustments for longer labels
+            # Create figure
+            fig_width, fig_height = self._calculate_figure_dimensions(len(ordered_snake_case_names))
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            
+            # Create bar plot (most important at top)
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['shap_bar'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=12, ha='right')  # INCREASED: Better readability
-            ax.set_xlabel('Mean Absolute SHAP Value', fontsize=12)  # INCREASED: Better readability
-            ax.set_title('Mean Absolute SHAP Values', fontsize=14, fontweight='bold')  # INCREASED: Match primary
-            ax.grid(True, alpha=0.3)
+            ax.set_yticklabels(nice_labels, fontsize=10, ha='right')
+            ax.set_xlabel('Mean Absolute SHAP Value', fontsize=11)
+            ax.set_title(f'Mean Absolute SHAP Values: {self.config.analysis_name}', 
+                        fontsize=12, fontweight='bold')
+            ax.margins(y=0.01)
+            ax.grid(True, alpha=0.3, axis='x')
             ax.set_axisbelow(True)
-            ax.margins(y=0.02)  # INCREASED: More generous spacing like primary
+            
+            plt.tight_layout()
+            output_path = os.path.join(self.config.output_dir, 
+                                      f"{self.config.analysis_name}_mean_shap.png")
+            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+            print(f"Mean SHAP plot saved to: {output_path}")
+            plt.show()
             
         except Exception as e:
-            logger.error(f"Failed to create mean SHAP panel: {str(e)}")
-            ax.text(0.5, 0.5, 'Error creating mean SHAP plot', ha='center', va='center', transform=ax.transAxes)
+            print(f"ERROR: Failed to create mean SHAP plot: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
-    def _create_permutation_importance_panel(self, ax, permutation_importance: pd.Series) -> None:
-        """Create permutation importance panel."""
+    def _plot_permutation_importance(self, permutation_importance: pd.Series) -> None:
+        """Create standalone permutation importance plot."""
         try:
-            # Order by importance - use original names internally
-            perm_items = sorted(permutation_importance.items(), key=lambda x: x[1], reverse=True)
+            # Order by importance (ascending for bottom-to-top display)
+            perm_items = sorted(permutation_importance.items(), key=lambda x: x[1], reverse=False)
             ordered_snake_case_names = [name for name, _ in perm_items]
             ordered_values = [value for _, value in perm_items]
-            
-            # Create nice labels for display
             nice_labels = [self._get_nice_name(name) for name in ordered_snake_case_names]
             
-            # Create plot with adjustments for longer labels
+            # Create figure
+            fig_width, fig_height = self._calculate_figure_dimensions(len(ordered_snake_case_names))
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            
+            # Create bar plot (most important at top)
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['permutation'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=12, ha='right')  # INCREASED: Better readability
-            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=12)  # INCREASED: Better readability
-            ax.set_title('Permutation Feature Importance', fontsize=14, fontweight='bold')  # INCREASED: Match primary
-            ax.grid(True, alpha=0.3)
+            ax.set_yticklabels(nice_labels, fontsize=10, ha='right')
+            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=11)
+            ax.set_title(f'Permutation Feature Importance: {self.config.analysis_name}', 
+                        fontsize=12, fontweight='bold')
+            ax.margins(y=0.01)
+            ax.grid(True, alpha=0.3, axis='x')
             ax.set_axisbelow(True)
-            ax.margins(y=0.02)  # INCREASED: More generous spacing like primary
+            
+            plt.tight_layout()
+            output_path = os.path.join(self.config.output_dir, 
+                                      f"{self.config.analysis_name}_permutation_importance.png")
+            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+            print(f"Permutation importance plot saved to: {output_path}")
+            plt.show()
             
         except Exception as e:
-            logger.error(f"Failed to create permutation importance panel: {str(e)}")
-            ax.text(0.5, 0.5, 'Error creating permutation plot', ha='center', va='center', transform=ax.transAxes)
+            print(f"ERROR: Failed to create permutation importance plot: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
-    def _calculate_figure_dimensions(self, n_features: int, plot_type: str = 'primary') -> Tuple[float, float]:
-        """Calculate optimal figure dimensions based on number of features."""
-        # OPTIMIZED DIMENSIONS: Ensure both plots have excellent readability
-        if plot_type == 'primary':
-            # Primary plot dimensions (already working well)
-            width = 24.0
-            height = max(16.0, n_features * 0.6 + 4)
-        else:
-            # Secondary plot: ENHANCED dimensions for better readability to match primary
-            width = 26.0  # SLIGHTLY WIDER: More space for two detailed bar charts
-            height = max(18.0, n_features * 0.7 + 5)  # TALLER: More generous spacing for readability
-        
-        height = min(height, 26.0)  # Reasonable maximum
-        
-        print(f"DEBUG DIMENSIONS: {plot_type} plot - width: {width}, height: {height}, n_features: {n_features}")
+    def _calculate_figure_dimensions(self, n_features: int) -> Tuple[float, float]:
+        """Calculate optimal figure dimensions for individual plots based on number of features."""
+        width = 12.0
+        height = max(8.0, n_features * 0.5 + 2)
+        height = min(height, 20.0)  # Reasonable maximum
         return width, height
 
-    def _plot_primary_composite(self):
-        """Create primary composite plot: Gini importance + SHAP beeswarm."""
-        print("DEBUG: _plot_primary_composite method called!")
-        try:
-            print("Generating primary composite plot (Gini + SHAP beeswarm)...")
-            
-            gini_importance = self.results['gini_importance']
-            shap_explanation = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
-            significance_results = self.results.get('significance_results')
-            
-            # Calculate figure dimensions
-            n_features = len(gini_importance)
-            fig_width, fig_height = self._calculate_figure_dimensions(n_features, 'primary')
-            
-            # Create figure with adjusted proportions for longer labels
-            plt.style.use('seaborn-v0_8-whitegrid')
-            
-            # Use the SAME approach as secondary plot (which works perfectly)
-            fig, (ax_gini, ax_shap) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
-            fig.suptitle(f'Feature Importance Analysis: {self.config.analysis_name}', 
-                        fontsize=14, fontweight='bold', y=0.98)  # EXACT MATCH to secondary plot
-            
-            # Create panels
-            self._create_gini_importance_panel(ax_gini, gini_importance, significance_results)
-            self._create_shap_beeswarm_panel(ax_shap, shap_explanation, significance_results)
-            
-            # Use the SAME layout approach as secondary plot
-            plt.tight_layout()
-            plt.subplots_adjust(top=0.93)
-            output_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_primary_FI_composite.png")
-            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
-            print(f"Primary composite plot saved to: {output_path}")
-            plt.show()
-            
-        except Exception as e:
-            print(f"Warning: Primary composite plot generation failed: {str(e)}")
+    def _generate_all_plots(self):
+        """Generate all individual feature importance plots."""
+        print("Generating individual feature importance plots...")
+        plt.style.use('seaborn-v0_8-whitegrid')
+        
+        gini_importance = self.results['gini_importance']
+        shap_explanation = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
+        permutation_importance = self.results['permutation_importance']
+        significance_results = self.results.get('significance_results')
+        
+        # Generate each plot individually
+        self._plot_gini_importance(gini_importance, significance_results)
+        self._plot_shap_beeswarm(shap_explanation, significance_results)
+        self._plot_mean_shap(shap_explanation)
+        self._plot_permutation_importance(permutation_importance)
 
-    def _plot_secondary_composite(self):
-        """Create secondary composite plot: Mean SHAP + Permutation importance."""
-        try:
-            print("Generating secondary composite plot (Mean SHAP + Permutation)...")
-            
-            shap_explanation = self._shap_explanation_for_positive_class(self.results['shap_explanation'])
-            permutation_importance = self.results['permutation_importance']
-            
-            # Calculate figure dimensions
-            n_features = len(permutation_importance)
-            fig_width, fig_height = self._calculate_figure_dimensions(n_features, 'secondary')
-            
-            # Create figure
-            plt.style.use('seaborn-v0_8-whitegrid')
-            fig, (ax_shap, ax_perm) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
-            fig.suptitle(f'Additional Feature Importance Metrics: {self.config.analysis_name}', 
-                        fontsize=16, fontweight='bold', y=0.96)  # INCREASED: Match primary plot title prominence
-            
-            # Create panels
-            self._create_mean_shap_panel(ax_shap, shap_explanation)
-            self._create_permutation_importance_panel(ax_perm, permutation_importance)
-            
-            # Adjust layout to match primary plot's superior spacing
-            plt.tight_layout()
-            plt.subplots_adjust(top=0.90, left=0.15, right=0.95, bottom=0.10)  # ENHANCED: Match primary plot margins
-            output_path = os.path.join(self.config.output_dir, f"{self.config.analysis_name}_secondary_FI_composite.png")
-            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
-            print(f"Secondary composite plot saved to: {output_path}")
-            plt.show()
-            
-        except Exception as e:
-            print(f"Warning: Secondary composite plot generation failed: {str(e)}")
+
 
     def plot_roc_curve(self):
         """Plot the ROC curve for classifier models."""
@@ -855,15 +793,14 @@ class RandomForestAnalyzer:
         self._test_feature_significance()
         
         # Generate plots
-        print("Generating enhanced visualization outputs...")
+        print("Generating visualization outputs...")
         
         # ROC curve for classifiers
         if self.config.model_type == 'classifier':
             self.plot_roc_curve()
         
-        # Enhanced composite plots
-        self._plot_primary_composite()
-        self._plot_secondary_composite()
+        # Generate all individual plots
+        self._generate_all_plots()
         
         print(f"--- Analysis Complete: {self.config.analysis_name} ---")
         print(f"All outputs saved to: {self.config.output_dir}")

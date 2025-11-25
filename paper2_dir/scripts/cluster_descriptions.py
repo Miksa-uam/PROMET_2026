@@ -918,7 +918,7 @@ def _plot_single_violin(
         # Convert data x-coord to figure coord
         x_fig = ax.transData.transform((i, 0))[0] / fig.dpi / fig_width
 
-        stats_text = f"n={row['cluster_n']}\n Median: {row['cluster_median']:.1f}"
+        stats_text = f"Median: {row['cluster_median']:.1f}"
         fig.text(x_fig, 0.87, stats_text, 
                 ha='center', va='center', fontsize=13,
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='gray'))
@@ -950,7 +950,7 @@ def _plot_single_violin(
     # fig.text(0.5, 0.001, 'cluster', ha='center', fontsize=12, weight='bold')
     
     # Population n and median box
-    pop_stats_text = f"Population n={row['pop_n']}\nPopulation median: {row['pop_median']:.1f}"
+    pop_stats_text = f"Population median: {row['pop_median']:.1f}"
     fig.text(0.96, 0.87, pop_stats_text, 
             ha='left', va='center', fontsize=13,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='gray'))
