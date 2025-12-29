@@ -831,8 +831,19 @@ def _plot_single_forest(
     """Internal function to plot a single forest plot (RR or RD)."""
     plt.style.use('seaborn-v0_8-whitegrid')
     
-    # Sort by wgc_name
-    plot_data = risk_df.sort_values('wgc_name', ascending=True)
+
+    # Apply sorting
+    # Determine which column to sort by
+    if plot_type == 'RR':
+        sort_col = 'risk_ratio'
+    else:
+        sort_col = 'risk_difference'
+    # ascending=True puts the smallest value at the BOTTOM and largest at the TOP.
+    # ascending=False puts the largest value at the BOTTOM and smallest at the TOP.
+    plot_data = risk_df.sort_values(by=sort_col, ascending=True)
+
+    # Alternatively, sort by wgc_name
+    # plot_data = risk_df.sort_values('wgc_name', ascending=True)
     
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(14, max(6, len(plot_data) * 0.5)),
                                    gridspec_kw={'width_ratios': [3, 0.01], 'wspace': 0.01})
@@ -845,15 +856,15 @@ def _plot_single_forest(
         ci_lower = plot_data['rr_ci_lower']
         ci_upper = plot_data['rr_ci_upper']
         ref_value = 1
-        default_xlabel = 'Risk Ratio'
-        default_title = f'Risk Ratios: {get_nice_name(outcome_variable, name_map)}'
+        default_xlabel = 'Risk ratio'
+        default_title = f'Risk ratios: {get_nice_name(outcome_variable, name_map)}'
     else:  # RD
         effect = plot_data['risk_difference']
         ci_lower = plot_data['rd_ci_lower']
         ci_upper = plot_data['rd_ci_upper']
         ref_value = 0
-        default_xlabel = 'Risk Difference'
-        default_title = f'Risk Differences: {get_nice_name(outcome_variable, name_map)}'
+        default_xlabel = 'Risk difference'
+        default_title = f'Risk differences: {get_nice_name(outcome_variable, name_map)}'
     
     # Use consistent color for all WGC groups
     colors = [WGC_COLOR] * len(plot_data)
@@ -893,7 +904,7 @@ def _plot_single_forest(
         plot_xlabel = default_xlabel
     
     ax.set_title(plot_title, fontsize=20, weight='bold')
-    ax.set_xlabel(plot_xlabel, fontsize=16)
+    ax.set_xlabel(plot_xlabel, fontsize=18)
     ax.grid(True, axis='x', which='both', linestyle='--', linewidth=0.5, alpha=0.5)
     
     # Right y-axis with effect sizes and CIs
@@ -910,8 +921,8 @@ def _plot_single_forest(
             label = f"RD: {row['risk_difference']*100:.1f}% [{row['rd_ci_lower']*100:.1f}-{row['rd_ci_upper']*100:.1f}%]"
         ci_labels.append(label)
     
-    ax2.set_yticklabels(ci_labels, fontsize=13, ha='left')
-    ax2.set_ylabel('Effect Size [95% CI]', fontsize=16, labelpad=15)
+    ax2.set_yticklabels(ci_labels, fontsize=16, ha='left')
+    ax2.set_ylabel('Effect Size [95% CI]', fontsize=18, labelpad=15)
     ax2.yaxis.set_label_position('right')
     ax2.yaxis.tick_right()
     ax2.tick_params(axis='y', pad=0)

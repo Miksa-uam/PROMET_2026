@@ -5,15 +5,16 @@
 Create the foundational structure for the cluster trajectories module.
 
 - [ ] 1.1 Create `scripts/cluster_trajectories.py` with module docstring and imports
-  - Import required libraries: pandas, numpy, matplotlib, seaborn, sqlite3, statsmodels
+  - Import required libraries: pandas, numpy, matplotlib, seaborn, sqlite3, statsmodels, patsy
   - Add module-level docstring explaining purpose and usage
   - Define module-level constants (DEFAULT_COLORS, DEFAULT_FIGURE_SIZE, etc.)
   - _Requirements: 6.1, 6.6_
 
 - [ ] 1.2 Extend `scripts/cluster_config.json` with trajectory analysis settings
+  - Add cluster algorithm, k value, and database paths to existing structure
   - Add `trajectory_analysis` section with default parameters
   - Add `lmm_analysis` section with model configuration
-  - Validate JSON structure
+  - Validate JSON structure and maintain existing cluster labels/colors
   - _Requirements: 2.1, 2.7_
 
 - [ ] 1.3 Create output directory structure
@@ -23,65 +24,72 @@ Create the foundational structure for the cluster trajectories module.
 
 ## Task 2: Configuration Management
 
-Implement configuration loading and validation.
+Implement configuration loading and validation following existing module patterns.
 
 - [ ] 2.1 Create `TrajectoryConfig` dataclass
   - Define all configuration fields with types and defaults
+  - Include database paths, table names, column mappings
   - Add validation methods for each field
+  - Follow patterns from cluster_descriptions.py
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
 
 - [ ] 2.2 Create `LMMConfig` dataclass
   - Define LMM-specific configuration fields
   - Add validation for model specification options
+  - Include spline configuration and coding options
   - _Requirements: 3.2, 3.4_
 
 - [ ] 2.3 Implement `load_trajectory_config()` function
-  - Load and parse cluster_config.json
+  - Load and parse extended cluster_config.json
   - Create TrajectoryConfig and LMMConfig objects
   - Handle missing or invalid configuration gracefully
+  - Use existing database files (pam_goldstd, measurements_p2)
   - _Requirements: 2.1, 2.6, 8.1, 8.2_
 
 - [ ] 2.4 Implement `validate_config()` function
-  - Check database file existence
+  - Check database file existence in ../dbs/ directory
   - Validate parameter ranges (smoothing_frac, cutoff_days, etc.)
-  - Verify color palette has sufficient colors
+  - Verify color palette has sufficient colors for clusters
+  - Validate table and column names exist in databases
   - _Requirements: 2.6, 8.1, 8.5_
 
 ## Task 3: Data Loading and Preparation
 
-Implement functions to load and prepare trajectory data.
+Implement functions to load and prepare trajectory data from existing databases.
 
 - [ ] 3.1 Implement `load_cluster_labels()` function
-  - Connect to cluster database
-  - Load specified cluster table
-  - Validate required columns exist
+  - Connect to cluster database (pnk_db2_p2_cluster_pam_goldstd.sqlite)
+  - Load cluster table (clust_labels_bl_nobc_bw_pam_goldstd)
+  - Extract cluster column (pam_k7) and patient identifiers
+  - Filter out outliers (cluster_id = -1)
   - Return DataFrame with patient_id, medical_record_id, cluster_id
   - _Requirements: 4.1, 4.6, 8.3, 8.5_
 
 - [ ] 3.2 Implement `load_measurements_for_patients()` function
-  - Connect to measurements database
-  - Create temporary table with cluster patient IDs
-  - Join to load only relevant measurements
+  - Connect to measurements database (pnk_db2_p2_in.sqlite)
+  - Load measurements table (measurements_p2)
+  - Create temporary table with cluster patient IDs for efficient joining
+  - Load measurement_date and weight_kg for cluster patients only
   - Validate required columns exist
   - _Requirements: 4.2, 4.6, 8.3_
 
 - [ ] 3.3 Implement `calculate_days_from_baseline()` function
-  - Convert measurement_date to datetime
+  - Convert measurement_date to datetime format
   - Group by patient_id and medical_record_id
   - Calculate days from first measurement for each patient
-  - Handle missing dates appropriately
+  - Handle missing or invalid dates appropriately
   - _Requirements: 4.4, 8.4_
 
 - [ ] 3.4 Implement `merge_with_clusters()` function
-  - Merge measurements with cluster labels on patient identifiers
-  - Validate merge success (no unexpected data loss)
-  - Return combined DataFrame
+  - Merge measurements with cluster labels on patient_id and medical_record_id
+  - Validate merge success (check for unexpected data loss)
+  - Return combined DataFrame with all required columns
   - _Requirements: 4.3, 4.6_
 
 - [ ] 3.5 Implement `create_fixed_time_cutoff_data()` function
-  - Filter data to specified cutoff_days
-  - Preserve all patient identifiers
-  - Return filtered DataFrame
+  - Filter data to specified cutoff_days (e.g., 365 days)
+  - Preserve all patient identifiers and cluster assignments
+  - Return filtered DataFrame for cutoff analysis
   - _Requirements: 1.8_
 
 ## Task 4: Trajectory Statistics and Smoothing
@@ -291,58 +299,59 @@ Create comprehensive documentation.
 
 ## Task 10: Testing and Validation
 
-Validate module functionality.
+Validate module functionality with real data and edge cases.
 
 - [ ] 10.1 Test with existing cluster configurations
-  - Run with PAM k=7 configuration
-  - Verify plots match expected output
-  - Check LMM results for reasonableness
+  - Run with PAM k=7 configuration from pnk_db2_p2_cluster_pam_goldstd.sqlite
+  - Verify plots are generated correctly and saved to outputs directory
+  - Check LMM results for statistical reasonableness and convergence
+  - Compare output quality with existing visualization modules
   - _Requirements: 7.1, 7.2, 7.5_
 
-- [ ] 10.2 Test error handling
+- [ ] 10.2 Test error handling and validation
   - Test with missing configuration file
   - Test with invalid database paths
-  - Test with insufficient data
-  - Verify error messages are clear
+  - Test with insufficient data (small clusters)
+  - Test with missing required columns
+  - Verify error messages are clear and actionable
   - _Requirements: 8.1, 8.2, 8.3, 8.4_
 
-- [ ] 10.3 Test edge cases
-  - Test with single cluster
+- [ ] 10.3 Test edge cases and robustness
+  - Test with single cluster scenario
   - Test with very short follow-up times
-  - Test with missing measurements
-  - _Requirements: 4.4, 7.5_
+  - Test with missing measurements or dates
+  - Test with extreme parameter values
+  - _Requirements: 4.4, 7.5, 8.6_
 
-- [ ] 10.4 Performance testing
-  - Measure execution time for full analysis
-  - Verify memory usage is reasonable
-  - Optimize bottlenecks if needed
+- [ ] 10.4 Performance and integration testing
+  - Measure execution time for full analysis pipeline
+  - Verify memory usage is reasonable for large datasets
+  - Test integration with existing notebook workflow
+  - Optimize any performance bottlenecks identified
   - _Requirements: 7.1, 7.2, 7.3, 7.5_
 
-## Task 11: Integration and Cleanup
+## Task 11: Integration and Notebook Implementation
 
-Finalize integration with existing codebase.
+Integrate the module with existing codebase and add notebook usage.
 
-- [ ] 11.1 Ensure consistency with other modules
+- [ ] 11.1 Ensure consistency with existing modules
   - Match naming conventions from cluster_descriptions.py
-  - Use same color palettes as wgc_visualizations.py
-  - Follow same configuration patterns
+  - Use same color palettes and styling as wgc_visualizations.py
+  - Follow same configuration and error handling patterns
+  - Maintain consistent output directory structure
   - _Requirements: 6.7_
 
-- [ ] 11.2 Clean up notebook
-  - Remove or comment out legacy trajectory code
-  - Add clear section headers for trajectory analysis
-  - Ensure all cells run without errors
-  - _Requirements: 6.7_
+- [ ] 11.2 Add trajectory analysis section to notebook
+  - Create new notebook section for cluster trajectory analysis
+  - Add cells demonstrating spaghetti plot generation
+  - Add cells demonstrating LMM analysis
+  - Include configuration examples and customization options
+  - _Requirements: 6.1, 6.2, 6.3, 6.7_
 
-- [ ] 11.3 Update cluster_config.json
-  - Add all necessary trajectory configuration
-  - Document configuration options with comments
-  - Provide sensible defaults
-  - _Requirements: 2.1, 2.7_
-
-- [ ] 11.4 Final validation
-  - Run complete notebook end-to-end
-  - Verify all outputs are generated correctly
-  - Check that figures are publication-quality
-  - Confirm module is ready for use
-  - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8_
+- [ ] 11.3 Final validation and testing
+  - Test with existing PAM k=7 cluster configuration
+  - Verify plots match expected output quality
+  - Check LMM results for statistical reasonableness
+  - Ensure all error handling works correctly
+  - Confirm module integrates seamlessly with notebook workflow
+  - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 7.1, 7.2, 7.5_

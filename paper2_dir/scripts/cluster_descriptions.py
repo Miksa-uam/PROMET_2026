@@ -1375,7 +1375,7 @@ def plot_cluster_lollipop(
             ax.axhline(y=y_pos - 0.75, color='grey', linestyle='-', linewidth=2.0)
     
     ax.set_yticks(y_ticks)
-    ax.set_yticklabels(y_tick_labels, fontsize=15)
+    ax.set_yticklabels(y_tick_labels, fontsize=16)
     ax.invert_yaxis()
     
     ax.axvline(x=0, color='black', linestyle='-', linewidth=1)
@@ -1392,7 +1392,7 @@ def plot_cluster_lollipop(
         plot_xlabel = 'Percent change: differences from population mean (%)'
     
     ax.set_title(plot_title, fontsize=20, weight='bold')
-    ax.set_xlabel(plot_xlabel, fontsize=15)
+    ax.set_xlabel(plot_xlabel, fontsize=16)
     ax.grid(True, axis='x', which='both', linestyle='--', linewidth=0.5)
     
     # Legend
@@ -1406,8 +1406,8 @@ def plot_cluster_lollipop(
         bbox_to_anchor=(1.0, 1.0), 
         loc='upper left', 
         title='Cluster', 
-        title_fontsize=15,
-        fontsize=13, 
+        title_fontsize=16,
+        fontsize=15, 
         frameon=True, fancybox=True,
         edgecolor='gray',
         facecolor='white',
@@ -1632,7 +1632,7 @@ def plot_cluster_heatmap(
         # Create cluster-specific colormap
         if cluster_id == 'Population':
             # White-to-red for population column
-            cmap = LinearSegmentedColormap.from_list('pop', ['white', 'red'])
+            cmap = LinearSegmentedColormap.from_list('pop', ['white', '#4D4D4D']) #'red'
         else:
             # White-to-cluster-color for cluster columns
             cluster_color = get_cluster_color(cluster_id, cluster_config, DEFAULT_PALETTE)
@@ -1645,10 +1645,10 @@ def plot_cluster_heatmap(
         for i in range(n_rows):
             text = annotations[i, j]
             if text:
-                ax.text(0, i, text, ha='center', va='center', fontsize=10)
+                ax.text(0, i, text, ha='center', va='center', fontsize=11)
         
         # Add column label at bottom, rotated and centered
-        ax.set_xlabel(cluster_labels[j], fontsize=13, rotation=45, ha='right')
+        ax.set_xlabel(cluster_labels[j], fontsize=16, rotation=45, ha='right')
         
         # Configure axes - remove all ticks and gridlines
         ax.set_xticks([])
@@ -1657,7 +1657,7 @@ def plot_cluster_heatmap(
         
         # Add row labels to leftmost axis only, with rotation
         if j == 0:
-            ax.set_yticklabels(wgc_labels, fontsize=13, rotation=0, ha='right')
+            ax.set_yticklabels(wgc_labels, fontsize=16, rotation=0, ha='right')
         else:
             ax.set_yticklabels([])
         
@@ -1695,10 +1695,10 @@ def plot_cluster_heatmap(
         plot_xlabel = '' #'Clusters'
     
     # Add overall title
-    fig.suptitle(plot_title, fontsize=16, weight='bold', y=0.96)
+    fig.suptitle(plot_title, fontsize=20, weight='bold', y=0.96)
     
     # Add y-axis label further to the left to avoid overlap with rotated variable labels
-    fig.text(0.00001, 0.5, plot_ylabel, fontsize=13, rotation=90, va='center', ha='left')
+    fig.text(0.00001, 0.5, plot_ylabel, fontsize=16, rotation=90, va='center', ha='left')
     
     # Save
     output_path = os.path.join(output_dir, output_filename)
@@ -1790,8 +1790,20 @@ def _plot_single_forest(
     """Internal function to plot a single forest plot (RR or RD)."""
     plt.style.use('seaborn-v0_8-whitegrid')
     
-    # Sort by cluster_id
-    plot_data = risk_df.sort_values('cluster_id', ascending=False)
+    # Sort values
+    # Determine which column to sort by
+    if plot_type == 'RR':
+        sort_col = 'risk_ratio'
+    else:
+        sort_col = 'risk_difference'
+
+    # Apply sorting
+    # ascending=True puts the smallest value at the BOTTOM and largest at the TOP.
+    # ascending=False puts the largest value at the BOTTOM and smallest at the TOP.
+    plot_data = risk_df.sort_values(sort_col, ascending=True) 
+
+    # Alternatively: sort by cluster_id
+    # plot_data = risk_df.sort_values('cluster_id', ascending=False)
     
     # The second subplot is an empty 'ghost plot' used only to display a right y axis with actual effect size and CI values - adjust its size accordingly 
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(14, max(6, len(plot_data) * 0.5)), 

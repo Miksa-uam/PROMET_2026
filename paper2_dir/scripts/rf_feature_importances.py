@@ -631,20 +631,20 @@ class RandomForestAnalyzer:
                                max_display=self.config.max_features_display or len(shap_explanation.feature_names),
                                show=False)
             
-            ax.set_title(f'SHAP Value Distribution: {self.config.analysis_name}', 
-                        fontsize=12, fontweight='bold')
-            ax.tick_params(axis='y', labelsize=10)
+            ax.set_title(f'SHAP value distribution: {self.config.analysis_name}', 
+                        fontsize=20, fontweight='bold')
+            ax.tick_params(axis='y', labelsize=16)
             ax.margins(y=0.01)
             
             # Add significance annotations
-            if significance_results and significance_results.shap_significant_features:
-                current_labels = [label.get_text() for label in ax.get_yticklabels()]
-                nice_to_snake = {self._get_nice_name(snake): snake for snake in ordered_snake_case_names}
-                plot_ordered_snake_names = [nice_to_snake.get(label, label) for label in current_labels]
+            # if significance_results and significance_results.shap_significant_features:
+            #     current_labels = [label.get_text() for label in ax.get_yticklabels()]
+            #     nice_to_snake = {self._get_nice_name(snake): snake for snake in ordered_snake_case_names}
+            #     plot_ordered_snake_names = [nice_to_snake.get(label, label) for label in current_labels]
                 
-                self._add_significance_annotations(
-                    ax, plot_ordered_snake_names, significance_results.shap_significant_features
-                )
+            #     self._add_significance_annotations(
+            #         ax, plot_ordered_snake_names, significance_results.shap_significant_features
+            #     )
             
             plt.tight_layout()
             output_path = os.path.join(self.config.output_dir, 
@@ -714,10 +714,10 @@ class RandomForestAnalyzer:
             y_positions = range(len(ordered_snake_case_names))
             ax.barh(y_positions, ordered_values, color=self.colors['permutation'], alpha=0.8)
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(nice_labels, fontsize=10, ha='right')
-            ax.set_xlabel('Permutation Importance (Mean Decrease in Score)', fontsize=11)
-            ax.set_title(f'Permutation Feature Importance: {self.config.analysis_name}', 
-                        fontsize=12, fontweight='bold')
+            ax.set_yticklabels(nice_labels, fontsize=16, ha='right')
+            ax.set_xlabel('Permutation importance (decrease in model accuracy)', fontsize=18)
+            ax.set_title(f'Permutation feature importance: {self.config.analysis_name}', 
+                        fontsize=20, fontweight='bold')
             ax.margins(y=0.01)
             ax.grid(True, alpha=0.3, axis='x')
             ax.set_axisbelow(True)

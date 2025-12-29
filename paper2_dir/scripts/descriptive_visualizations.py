@@ -456,7 +456,17 @@ def plot_forest(
     
     plt.style.use('seaborn-v0_8-whitegrid')
     
-    plot_data = results_df.sort_values(by=label_col, ascending=False)
+
+    # Apply sorting
+    # Determine which column to sort by
+    if plot_type == 'RR':
+        sort_col = 'risk_ratio'
+    else:
+        sort_col = 'risk_difference'
+    # ascending=True puts the smallest value at the BOTTOM and largest at the TOP.
+    # ascending=False puts the largest value at the BOTTOM and smallest at the TOP.
+    plot_data = results_df.sort_values(by=sort_col, ascending=True)
+
     fig, ax = plt.subplots(figsize=(14, max(6, len(plot_data) * 0.5)))
     y_pos = np.arange(len(plot_data))
 

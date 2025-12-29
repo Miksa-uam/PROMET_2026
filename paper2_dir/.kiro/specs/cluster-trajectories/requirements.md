@@ -48,7 +48,7 @@ This specification defines the requirements for creating a unified `cluster_traj
 
 ### Requirement 3: Linear Mixed Model Analysis
 
-**User Story:** As a researcher, I want to fit linear mixed models to cluster trajectories, so that I can statistically compare trajectory slopes and intercepts across clusters.
+**User Story:** As a researcher, I want to fit linear mixed models to cluster trajectories, so that I can statistically compare trajectory slopes and intercepts across clusters. 
 
 #### Acceptance Criteria
 
