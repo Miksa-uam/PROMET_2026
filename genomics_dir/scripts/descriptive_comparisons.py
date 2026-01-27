@@ -107,7 +107,7 @@ def get_variable_types(df, cause_cols):
     """Determines if a variable is continuous, categorical, or availability."""
     var_types = {}
     for col in df.columns:
-        if (col in ["sex_f", "instant_dropout"] or col.endswith("_achieved") or col.endswith("_dropout") or col in cause_cols):
+        if (col in ["sex_f", "instant_dropout"] or col.startswith("country_") or col.endswith("_achieved") or col.endswith("_dropout") or col in cause_cols):
             var_types[col] = "categorical"
         elif col in ["patient_id", "medical_record_id", "medical_record_start_date"]:
             continue
@@ -151,6 +151,8 @@ def add_empty_rows_and_pretty_names(summary_rows, pretty_names):
                 new_rows.append(found_row)
     return new_rows
 
+# ! HERE is where you determine the type of continous variable comparison test used - currently set to MWU ASSUMING NON-NORMALITY
+# IF data is found to be normal, switch to welchs_ttest
 def perform_comparison(g0, g1, var, vtype):
     """Compares two groups on a given variable using the appropriate statistical test."""
     if var not in g0.columns or var not in g1.columns:
@@ -167,7 +169,6 @@ def perform_comparison(g0, g1, var, vtype):
         p_value = np.nan
     return p_value
 
-# descriptive_comparisons.py
 
 def switch_pvalues_to_asterisks(df: pd.DataFrame, data_columns: list) -> pd.DataFrame:
     """Creates a publication-ready table by replacing p-values with significance asterisks."""
@@ -265,212 +266,6 @@ def demographic_stratification(df, df_mother, config: descriptive_comparisons_co
     summary_df.to_sql(config.demographic_output_table, conn, if_exists="replace", index=False)
     print(f"Demographic stratification table saved to {config.demographic_output_table}")
 
-def wgc_stratification(df, config: descriptive_comparisons_config, conn):
-    """Performs stratification based on weight gain cause variables."""
-    print("Running Weight Gain Cause Stratification...")
-    row_order = config.row_order
-    cause_cols = get_cause_cols(row_order)
-    var_types = get_variable_types(df, cause_cols)
-    groups, strata_pairs = {}, []
-    for cause in cause_cols:
-        pretty_cause = next((p for v, p in row_order if v == cause), cause).replace(" (yes/no)", "")
-        yes_label, no_label = f"{pretty_cause}: Yes", f"{pretty_cause}: No"
-        groups[no_label], groups[yes_label] = df[df[cause] == 0], df[df[cause] == 1]
-        strata_pairs.append((no_label, yes_label, pretty_cause))
-    summary_rows = []
-    n_row = {"Variable": "N"}
-    for gA_name, gB_name, label in strata_pairs:
-        n_row[gA_name], n_row[gB_name], n_row[f"{label}: p-value"] = len(groups.get(gA_name, [])), len(groups.get(gB_name, [])), "N/A"
-    summary_rows.append(n_row)
-    for i, (var, _) in enumerate(row_order):
-        if var == "N" or var.startswith("delim_"): continue
-        print(f"  Processing variable {i}/{len(row_order)}: {var}")
-        vtype, row = var_types.get(var, "continuous"), {"Variable": var}
-        for gA_name, gB_name, label in strata_pairs:
-            gA, gB = groups.get(gA_name), groups.get(gB_name)
-            row[gA_name], row[gB_name] = format_value(gA, var, vtype), format_value(gB, var, vtype)
-            row[f"{label}: p-value"] = perform_comparison(gA, gB, var, vtype)
-        summary_rows.append(row)
-    summary_df = pd.DataFrame(add_empty_rows_and_pretty_names(summary_rows, row_order))
-    if config.fdr_correction:
-        try:
-            pvalue_columns = [f"{label}: p-value" for _, _, label in strata_pairs]
-            if pvalue_columns:
-                print("Applying FDR correction to weight gain cause stratification p-values...")
-                pvalue_dict = collect_pvalues_from_dataframe(summary_df, pvalue_columns)
-                valid_pvals = sum(sum(1 for p in pvals if pd.notna(p) and isinstance(p, (int, float))) for _, pvals in pvalue_dict.items())
-                if valid_pvals > 1:
-                    print(f"FDR correction proceeding with {valid_pvals} valid p-values...")
-                    corrections = {col: apply_fdr_correction(pvals) for col, pvals in pvalue_dict.items()}
-                    summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
-                    print(f"FDR correction applied to {len(pvalue_columns)} weight gain cause p-value columns")
-                else:
-                    print(f"Warning: FDR correction skipped, only {valid_pvals} valid p-value(s) found.")
-        except Exception as e:
-            print(f"Error: FDR correction failed for WGC stratification. {e}")
-    summary_df.to_sql(config.wgc_output_table, conn, if_exists="replace", index=False)
-    print(f"Weight gain cause stratification table saved to {config.wgc_output_table}")
-
-def wgc_vs_population_mean_analysis(df, config: descriptive_comparisons_config, conn):
-    """Performs WGC vs population mean analysis and saves detailed and publication-ready tables."""
-    output_table_name = getattr(config, 'wgc_vs_mean_output_table', None)
-    if not isinstance(output_table_name, str) or not output_table_name.strip():
-        return
-    
-    print("Running WGC vs Population Mean Analysis...")
-    row_order = config.row_order
-    cause_cols = get_cause_cols(row_order)
-    var_types = get_variable_types(df, cause_cols)
-    groups, wgc_labels = {}, []
-    for cause in cause_cols:
-        pretty_cause = next((p for v, p in row_order if v == cause), cause).replace(" (yes/no)", "")
-        groups[pretty_cause] = df[df[cause] == 1]
-        wgc_labels.append(pretty_cause)
-    summary_rows = []
-    n_row = {"Variable": "N", "Population Mean (\u00B1SD) or N (%)": len(df)}
-    for label in wgc_labels:
-        n_row[f"{label}: Mean/N"] = len(groups[label])
-        n_row[f"{label}: p-value"] = "N/A"
-    summary_rows.append(n_row)
-    for i, (var, _) in enumerate(row_order):
-        if var == "N" or var.startswith("delim_"): continue
-        print(f"  Processing variable {i}/{len(row_order)}: {var}")
-        vtype, row = var_types.get(var, "continuous"), {"Variable": var}
-        row["Population Mean (\u00B1SD) or N (%)"] = format_value(df, var, vtype)
-        for label in wgc_labels:
-            group = groups[label]
-            row[f"{label}: Mean/N"] = format_value(group, var, vtype)
-            p_val = perform_comparison(df, group, var, vtype)
-            row[f"{label}: p-value"] = p_val
-        summary_rows.append(row)
-    summary_df = pd.DataFrame(add_empty_rows_and_pretty_names(summary_rows, row_order))
-    if config.fdr_correction:
-        try:
-            p_cols = [f"{label}: p-value" for label in wgc_labels]
-            if p_cols:
-                print("Applying FDR correction to WGC vs population mean p-values...")
-                p_dict = collect_pvalues_from_dataframe(summary_df, p_cols)
-                corrections = {col: apply_fdr_correction(pvals) for col, pvals in p_dict.items()}
-                summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
-                print(f"FDR correction applied to {len(p_cols)} columns.")
-        except Exception as e:
-            print(f"Error: FDR correction failed. Continuing with raw p-values. Details: {e}")
-    detailed_name = f"{output_table_name}_detailed"
-    summary_df.to_sql(detailed_name, conn, if_exists="replace", index=False)
-    print(f"Detailed WGC vs population mean analysis table saved to {detailed_name}")
-    data_cols = [col for col in summary_df.columns if ': Mean/N' in col]
-    pub_df = switch_pvalues_to_asterisks(summary_df, data_cols)
-    pub_df.to_sql(output_table_name, conn, if_exists='replace', index=False)
-    print(f"Publication-ready WGC vs population mean analysis table saved to {output_table_name}")
-
-def cluster_vs_population_mean_analysis(df, config: descriptive_comparisons_config, conn, cluster_col: str = 'cluster_id'):
-    """
-    Performs cluster vs population mean analysis for WGC variables.
-    Analyzes the prevalence of each WGC in each cluster compared to the population.
-    
-    Args:
-        df: DataFrame with cluster_id column and WGC binary variables
-        config: Configuration object (reuse existing config structure)
-        conn: Database connection for saving results
-        cluster_col: Name of column containing cluster IDs (default: 'cluster_id')
-    
-    Returns:
-        DataFrame for heatmap generation with prevalence data
-    """
-    output_table_name = getattr(config, 'cluster_vs_mean_output_table', None)
-    if not isinstance(output_table_name, str) or not output_table_name.strip():
-        return None
-    
-    # Validate cluster column exists
-    if cluster_col not in df.columns:
-        raise ValueError(f"Cluster column '{cluster_col}' not found in DataFrame. Available columns: {df.columns.tolist()}")
-    
-    print("Running Cluster vs Population Mean Analysis...")
-    
-    # Check for sufficient data
-    if len(df) < 10:
-        print(f"⚠️ Warning: Very small sample size (n={len(df)}). Results may be unreliable.")
-    
-    row_order = config.row_order
-    cause_cols = get_cause_cols(row_order)
-    var_types = get_variable_types(df, cause_cols)
-    
-    # Get unique clusters and create groups
-    clusters = sorted(df[cluster_col].dropna().unique())
-    cluster_labels = [f'Cluster {int(cid)}' for cid in clusters]
-    groups = {}
-    
-    for cluster_id in clusters:
-        label = f'Cluster {int(cluster_id)}'
-        cluster_df = df[df[cluster_col] == cluster_id]
-        groups[label] = cluster_df
-        
-        # Warn about small clusters
-        if len(cluster_df) < 5:
-            print(f"⚠️ Warning: {label} has only {len(cluster_df)} samples. Statistical tests may be unreliable.")
-    
-    # Build summary rows - analyzing WGC variables (rows) across clusters (columns)
-    summary_rows = []
-    
-    # N row
-    n_row = {"Variable": "N", "Population Mean (\u00B1SD) or N (%)": len(df)}
-    for label in cluster_labels:
-        n_row[f"{label}: Mean/N"] = len(groups[label])
-        n_row[f"{label}: p-value"] = "N/A"
-    summary_rows.append(n_row)
-    
-    # Process each WGC variable (rows in the output)
-    for i, (var, _) in enumerate(row_order):
-        if var == "N" or var.startswith("delim_"):
-            continue
-        if var not in cause_cols:  # Only process WGC variables
-            continue
-        
-        print(f"  Processing WGC variable {i}/{len(row_order)}: {var}")
-        vtype = var_types.get(var, "categorical")  # WGCs are categorical
-        row = {"Variable": var}
-        
-        # Population mean for this WGC
-        row["Population Mean (\u00B1SD) or N (%)"] = format_value(df, var, vtype)
-        
-        # For each cluster, calculate WGC prevalence and compare to population
-        for label in cluster_labels:
-            cluster_df = groups[label]
-            row[f"{label}: Mean/N"] = format_value(cluster_df, var, vtype)
-            p_val = perform_comparison(df, cluster_df, var, vtype)
-            row[f"{label}: p-value"] = p_val
-        
-        summary_rows.append(row)
-    
-    # Create DataFrame and apply FDR correction
-    summary_df = pd.DataFrame(add_empty_rows_and_pretty_names(summary_rows, row_order))
-    
-    if config.fdr_correction:
-        try:
-            p_cols = [f"{label}: p-value" for label in cluster_labels]
-            if p_cols:
-                print("Applying FDR correction to cluster vs population mean p-values...")
-                p_dict = collect_pvalues_from_dataframe(summary_df, p_cols)
-                corrections = {col: apply_fdr_correction(pvals) for col, pvals in p_dict.items()}
-                summary_df = integrate_corrected_pvalues(summary_df, corrections, "(FDR-corrected)")
-                print(f"FDR correction applied to {len(p_cols)} columns.")
-        except Exception as e:
-            print(f"Error: FDR correction failed. Continuing with raw p-values. Details: {e}")
-    
-    # Save detailed table with p-values
-    detailed_name = f"{output_table_name}_detailed"
-    summary_df.to_sql(detailed_name, conn, if_exists="replace", index=False)
-    print(f"Detailed cluster vs population mean analysis table saved to {detailed_name}")
-    
-    # Create publication-ready table with asterisks
-    data_cols = [col for col in summary_df.columns if ': Mean/N' in col]
-    pub_df = switch_pvalues_to_asterisks(summary_df, data_cols)
-    pub_df.to_sql(output_table_name, conn, if_exists='replace', index=False)
-    print(f"Publication-ready cluster vs population mean analysis table saved to {output_table_name}")
-    
-    # Return DataFrame for heatmap generation
-    return summary_df
-
 # =========================
 # 3. MAIN PIPELINE
 # =========================
@@ -492,9 +287,7 @@ def run_descriptive_comparisons(master_config: master_config):
                 print(f"  Loaded data: {len(df_input)} input records, {len(df_mother)} mother records.")
                 with sqlite3.connect(master_config.paths.paper_out_db) as conn_out:
                     demographic_stratification(df_input, df_mother, analysis_config, conn_out)
-                    wgc_stratification(df_input, analysis_config, conn_out)
-                    if hasattr(analysis_config, 'wgc_vs_mean_output_table'):
-                        wgc_vs_population_mean_analysis(df_input, analysis_config, conn_out)
+                    # WGC analyses removed as per user request
                 print(f"  Analysis '{analysis_config.analysis_name}' completed successfully.")
             except Exception as e:
                 print(f"  Error: Analysis '{analysis_config.analysis_name}' failed: {e}")

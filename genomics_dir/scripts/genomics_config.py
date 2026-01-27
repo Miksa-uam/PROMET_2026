@@ -72,18 +72,8 @@ class descriptive_comparisons_config:
     demographic_output_table: str
     demographic_strata: List[str]
     
-    # Settings for WGC stratification
-    wgc_output_table: str
-    wgc_strata: List[str] # This can be left empty if not needed
-
     # Optional plot filename
     # bias_plot_filename: Optional[str] = None
-    
-    # Optional WGC vs population mean analysis
-    wgc_vs_mean_output_table: Optional[str] = None
-    
-    # Optional cluster vs population mean analysis
-    cluster_vs_mean_output_table: Optional[str] = None
     
     # FDR correction setting
     fdr_correction: bool = False

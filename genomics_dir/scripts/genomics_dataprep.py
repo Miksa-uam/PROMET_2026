@@ -81,7 +81,10 @@ def genomics_database_subset(config: master_config) -> None:
 def make_column_order(config: timetoevent_config) -> list:
     """Generates the final column order based on the provided configuration."""
 
-    cols = config.followup_columns.copy()
+    # cols = config.followup_columns.copy()
+    # cols += config.predictor_columns
+    cols = config.predictor_columns.copy()
+    cols += config.followup_columns
     for w in config.time_windows:
         prefix = f"{w}d"
         cols += [
@@ -96,7 +99,6 @@ def make_column_order(config: timetoevent_config) -> list:
         cols += [
             f"{prefix}_achieved", f"{prefix}_%", f"{prefix}_date", f"days_to_{prefix}"
         ]
-    cols += config.predictor_columns
     return cols
 
 def load_measurements(conn, config: timetoevent_config) -> pd.DataFrame:
@@ -155,30 +157,38 @@ def calc_overall_followup(patient_record_measurements: pd.DataFrame,
     last["instant_dropout"] = 0 # Initialize instant_dropout
 
     if followup_measurements.empty:
-        last["last_aval_date"] = baseline_row_info["baseline_date"]
+        # last["last_aval_date"] = baseline_row_info["baseline_date"]
+        last["final_date"] = baseline_row_info["baseline_date"]
         last["total_followup_days"] = 1
         last["instant_dropout"] = 1 # Set to 1 if only baseline measurement exists
-        last["last_aval_weight_kg"] = baseline_row_info["baseline_weight_kg"]
+        # last["last_aval_weight_kg"] = baseline_row_info["baseline_weight_kg"]
+        last["final_weight_kg"] = baseline_row_info["baseline_weight_kg"]
         last["total_wl_kg"], last["total_wl_%"] = 0.0, 0.0
         last["final_bmi"] = baseline_row_info["baseline_bmi"]
         last["bmi_reduction"] = 0.0
-        last["last_aval_fat_%"] = baseline_row_info["baseline_fat_%"]
+        # last["last_aval_fat_%"] = baseline_row_info["baseline_fat_%"]
+        last["final_fat_%"] = baseline_row_info["baseline_fat_%"]
         last["total_fat_loss_%"] = 0.0
-        last["last_aval_muscle_%"] = baseline_row_info["baseline_muscle_%"]
+        # last["last_aval_muscle_%"] = baseline_row_info["baseline_muscle_%"]
+        last["final_muscle_%"] = baseline_row_info["baseline_muscle_%"]
         last["total_muscle_change_%"] = 0.0
     else:
         last_meas = followup_measurements.iloc[-1]
         dt = (last_meas.measurement_date - baseline_date).days + 1
-        last["last_aval_date"] = last_meas.measurement_date
+        # last["last_aval_date"] = last_meas.measurement_date
+        last["final_date"] = last_meas.measurement_date
         last["total_followup_days"] = dt
-        last["last_aval_weight_kg"] = last_meas.weight_kg
+        # last["last_aval_weight_kg"] = last_meas.weight_kg
+        last["final_weight_kg"] = last_meas.weight_kg
         last["total_wl_kg"] = last_meas.weight_kg - baseline_row_info["baseline_weight_kg"]
         last["total_wl_%"] = 100 * last["total_wl_kg"] / baseline_row_info["baseline_weight_kg"] if baseline_row_info["baseline_weight_kg"] else 0
         last["final_bmi"] = last_meas.bmi
         last["bmi_reduction"] = last_meas.bmi - baseline_row_info["baseline_bmi"]
-        last["last_aval_fat_%"] = last_meas["fat_%"]
+        # last["last_aval_fat_%"] = last_meas["fat_%"]
+        last["final_fat_%"] = last_meas["fat_%"]
         last["total_fat_loss_%"] = last_meas["fat_%"] - baseline_row_info["baseline_fat_%"]
-        last["last_aval_muscle_%"] = last_meas["muscle_%"]
+        # last["last_aval_muscle_%"] = last_meas["muscle_%"]
+        last["final_muscle_%"] = last_meas["muscle_%"]
         last["total_muscle_change_%"] = last_meas["muscle_%"] - baseline_row_info["baseline_muscle_%"]
     
     last["nr_total_measurements"] = len(patient_record_measurements)
@@ -340,27 +350,56 @@ def build_timetoevent_table(config: master_config):
         output_rows.append(out_dict)
 
     df_out = pd.DataFrame(output_rows)
-    # Reorder columns (ensure all columns produced are in output_column_order, or handle missing ones)
-    # If some columns might not be generated for all rows (e.g. from record_info_with_baseline if it was skipped),
-    # df_out.reindex might introduce NaNs. This should be fine.
-    df_out = df_out.reindex(columns=output_column_order)
 
-    # 4. Save to the same input database defined in the config - this is still considered an 'input' of downstream analyses, so keep it there
+    # --- NEW: PROCESS COUNTRY DUMMIES ---
+    df_out, output_column_order, dummy_cols = process_country_dummies(df_out, output_column_order)
+
+    # Reorder columns (ensure all columns produced are in output_column_order, or handle missing ones)
+    
+    # Filter output_column_order to only include columns that actually made it into df_out
+    final_cols = [c for c in output_column_order if c in df_out.columns]
+    
+    df_out = df_out.reindex(columns=final_cols)
+
+    # 4. Save to the same input database defined in the config
     conn_out = sqlite3.connect(paths_config.paper_in_db)
     df_out.to_sql(timetoevent_config.output_table, conn_out, if_exists="replace", index=False)
     conn_out.close()
 
     print(f"Saved {len(df_out)} rows to {paths_config.paper_in_db}::{timetoevent_config.output_table}")
-
-"""
-3. SUBSET TIME-TO-EVENT TABLE FOR SPECIFIC SUBCOHORTS - LIKE WGC COMPLETE, GENOMICS AVAILABLE
-"""
+    if dummy_cols:
+        print(f"  - Generated {len(dummy_cols)} country dummy columns: {dummy_cols}")
 
 
+def process_country_dummies(df: pd.DataFrame, output_column_order: list) -> tuple[pd.DataFrame, list, list]:
+    """
+    Processes country column to create dummy variables and updates the output_column_order.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame containing the 'country' column.
+        output_column_order (list): The list defining the desired order of output columns.
+        
+    Returns:
+        tuple[pd.DataFrame, list, list]: The modified DataFrame, updated output_column_order, and a list of generated dummy column names.
+    """
+    dummy_cols = []
+    if "country" in df.columns:
+        dummies = pd.get_dummies(df["country"], prefix="country", dtype=int)
+        df = pd.concat([df, dummies], axis=1)
+        dummy_cols = sorted(dummies.columns.tolist())
+        
+        # Inject dummy columns into output_column_order right after 'country'
+        if "country" in output_column_order:
+            idx = output_column_order.index("country")
+            # Insert in reverse order so they end up in correct forward order A, B, C...
+            for col in reversed(dummy_cols):
+                output_column_order.insert(idx + 1, col)
+        else:
+            # If country not in output list for some reason, append them
+            output_column_order.extend(dummy_cols)
+            
+    return df, output_column_order, dummy_cols
 
-# p2_dataprep.py
-
-# ... (add this function to your module) ...
 
 def subset_timetoevent_table(config: master_config) -> None:
     """
