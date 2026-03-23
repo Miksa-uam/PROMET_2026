@@ -28,8 +28,8 @@ class timetoevent_config:
     time_windows: List[int] # A configurable list of follow-up time windows - eg. 40/60 days follow-up
     window_span: int # The span of the follow-up time windows - eg. 40 +/- 10 days
     fetch_from_records: List[str] # Columns to fetch from the medical records table
-    followup_columns: List[str] # Columns containing follow-up data
-    predictor_columns: List[str] # Columns containing predictor data
+    clinical_data_columns: List[str] # Columns containing clinical data
+    metadata_columns: List[str] # Columns containing metadata
 
 @dataclass
 class timetoevent_subsetting_config:

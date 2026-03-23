@@ -26,7 +26,7 @@ def genomics_database_subset(config: master_config) -> None:
     patient_ids = tuple(records['patient_id'])
 
     # Pull rows from both tables corresponding to the identified records.
-    # Create new table names measurements_p2 and medical_records_p2.
+    # Create new table names measurements_genomics and medical_records_genomics.
     table_mapping = {
         "medical_records_filtered": ("medical_records_genomics", record_ids),
         "measurements_filtered": ("measurements_genomics", record_ids)
@@ -83,8 +83,8 @@ def make_column_order(config: timetoevent_config) -> list:
 
     # cols = config.followup_columns.copy()
     # cols += config.predictor_columns
-    cols = config.predictor_columns.copy()
-    cols += config.followup_columns
+    cols = config.metadata_columns.copy()
+    cols += config.clinical_data_columns
     for w in config.time_windows:
         prefix = f"{w}d"
         cols += [
@@ -115,16 +115,25 @@ def load_measurements(conn, config: timetoevent_config) -> pd.DataFrame:
     return df
 
 def load_med_records(conn, config: timetoevent_config) -> pd.DataFrame:
-    # Gets table name and columns to fetch from the config object
-    cols_to_fetch = ", ".join(config.fetch_from_records)
-    sql_query = f"SELECT {cols_to_fetch} FROM {config.input_records}"
-    df = pd.read_sql(sql_query, conn)
+    cols_to_fetch = ', '.join(config.fetch_from_records)
+    # We explicitly tell pandas which columns are dates so it doesn't treat them as text
+    date_columns = [
+        "medical_record_creation_date", "medical_record_closing_date",
+        "genomics_prescription_date", "genomics_purchase_date", 
+        "genomics_test_date", "genomics_results_date"
+    ]
+    
+    df = pd.read_sql(
+        f"SELECT {cols_to_fetch} FROM {config.input_records}", 
+        conn,
+        parse_dates=date_columns
+    )
     return df
 
 def extract_baseline(meas: pd.DataFrame) -> pd.DataFrame:
     base = meas[meas["first_in_record"] == 1].copy()
     base = base.rename(columns={
-        "measurement_date": "baseline_date",
+        "measurement_date": "baseline_measurement_date",
         "weight_kg": "baseline_weight_kg",
         "bmi": "baseline_bmi",
         "fat_%": "baseline_fat_%",
@@ -132,7 +141,7 @@ def extract_baseline(meas: pd.DataFrame) -> pd.DataFrame:
     })
     return base[[
         "patient_id", "medical_record_id",
-        "baseline_date", "baseline_weight_kg", "baseline_bmi",
+        "baseline_measurement_date", "baseline_weight_kg", "baseline_bmi",
         "baseline_fat_%", "baseline_muscle_%"
     ]]
 
@@ -147,47 +156,39 @@ def merge_baseline_and_records(baseline, recs):
 def calc_overall_followup(patient_record_measurements: pd.DataFrame, 
                           baseline_row_info: pd.Series
                           ) -> pd.Series:
-    baseline_date = baseline_row_info["baseline_date"]
+    baseline_measurement_date = baseline_row_info["baseline_measurement_date"]
     
     followup_measurements = patient_record_measurements[
-        patient_record_measurements["measurement_date"] > baseline_date
+        patient_record_measurements["measurement_date"] > baseline_measurement_date
     ] # patient_record_measurements is already sorted by date
 
     last = baseline_row_info.copy() # Start with baseline info (which is a Series)
     last["instant_dropout"] = 0 # Initialize instant_dropout
 
     if followup_measurements.empty:
-        # last["last_aval_date"] = baseline_row_info["baseline_date"]
-        last["final_date"] = baseline_row_info["baseline_date"]
+        last["final_measurement_date"] = baseline_row_info["baseline_measurement_date"]
         last["total_followup_days"] = 1
         last["instant_dropout"] = 1 # Set to 1 if only baseline measurement exists
-        # last["last_aval_weight_kg"] = baseline_row_info["baseline_weight_kg"]
         last["final_weight_kg"] = baseline_row_info["baseline_weight_kg"]
         last["total_wl_kg"], last["total_wl_%"] = 0.0, 0.0
         last["final_bmi"] = baseline_row_info["baseline_bmi"]
         last["bmi_reduction"] = 0.0
-        # last["last_aval_fat_%"] = baseline_row_info["baseline_fat_%"]
         last["final_fat_%"] = baseline_row_info["baseline_fat_%"]
         last["total_fat_loss_%"] = 0.0
-        # last["last_aval_muscle_%"] = baseline_row_info["baseline_muscle_%"]
         last["final_muscle_%"] = baseline_row_info["baseline_muscle_%"]
         last["total_muscle_change_%"] = 0.0
     else:
         last_meas = followup_measurements.iloc[-1]
-        dt = (last_meas.measurement_date - baseline_date).days + 1
-        # last["last_aval_date"] = last_meas.measurement_date
-        last["final_date"] = last_meas.measurement_date
+        dt = (last_meas.measurement_date - baseline_measurement_date).days + 1
+        last["final_measurement_date"] = last_meas.measurement_date
         last["total_followup_days"] = dt
-        # last["last_aval_weight_kg"] = last_meas.weight_kg
         last["final_weight_kg"] = last_meas.weight_kg
         last["total_wl_kg"] = last_meas.weight_kg - baseline_row_info["baseline_weight_kg"]
         last["total_wl_%"] = 100 * last["total_wl_kg"] / baseline_row_info["baseline_weight_kg"] if baseline_row_info["baseline_weight_kg"] else 0
         last["final_bmi"] = last_meas.bmi
         last["bmi_reduction"] = last_meas.bmi - baseline_row_info["baseline_bmi"]
-        # last["last_aval_fat_%"] = last_meas["fat_%"]
         last["final_fat_%"] = last_meas["fat_%"]
         last["total_fat_loss_%"] = last_meas["fat_%"] - baseline_row_info["baseline_fat_%"]
-        # last["last_aval_muscle_%"] = last_meas["muscle_%"]
         last["final_muscle_%"] = last_meas["muscle_%"]
         last["total_muscle_change_%"] = last_meas["muscle_%"] - baseline_row_info["baseline_muscle_%"]
     
@@ -204,16 +205,16 @@ def calc_fixed_timepoints(patient_record_measurements: pd.DataFrame,
                           baseline_row_info: pd.Series, 
                           config: timetoevent_config) -> dict:
     out = {}
-    baseline_date = baseline_row_info["baseline_date"]
+    baseline_measurement_date = baseline_row_info["baseline_measurement_date"]
     baseline_weight_kg = baseline_row_info["baseline_weight_kg"]
     baseline_bmi = baseline_row_info["baseline_bmi"]
     baseline_fat_pct = baseline_row_info["baseline_fat_%"]
     baseline_muscle_pct = baseline_row_info["baseline_muscle_%"]
 
     for w in config.time_windows:
-        target_date = baseline_date + timedelta(days=w)
-        lo = baseline_date + timedelta(days=w - config.window_span)
-        hi = baseline_date + timedelta(days=w + config.window_span)
+        target_date = baseline_measurement_date + timedelta(days=w)
+        lo = baseline_measurement_date + timedelta(days=w - config.window_span)
+        hi = baseline_measurement_date + timedelta(days=w + config.window_span)
 
         window_meas = patient_record_measurements[
             (patient_record_measurements["measurement_date"] >= lo) &
@@ -245,18 +246,18 @@ def calc_fixed_timepoints(patient_record_measurements: pd.DataFrame,
             out[f"{prefix}_muscle_%"] = take["muscle_%"]
             out[f"{prefix}_muscle_change_%"] = take["muscle_%"] - baseline_muscle_pct
             out[f"{prefix}_date"] = take.measurement_date
-            out[f"days_to_{prefix}_measurement"] = (take.measurement_date - baseline_date).days + 1
+            out[f"days_to_{prefix}_measurement"] = (take.measurement_date - baseline_measurement_date).days + 1
     return out
 
 def calc_time_to_targets(patient_record_measurements: pd.DataFrame, 
                          baseline_row_info: pd.Series, 
                          config: timetoevent_config) -> dict:
     out = {}
-    baseline_date = baseline_row_info["baseline_date"]
+    baseline_measurement_date = baseline_row_info["baseline_measurement_date"]
     baseline_weight = baseline_row_info["baseline_weight_kg"]
 
     # Filter measurements strictly after baseline date; patient_record_measurements is already sorted
-    group = patient_record_measurements[patient_record_measurements["measurement_date"] > baseline_date]
+    group = patient_record_measurements[patient_record_measurements["measurement_date"] > baseline_measurement_date]
 
     if group.empty or baseline_weight == 0: # Added check for baseline_weight to prevent division by zero
         for t in config.weight_loss_targets:
@@ -278,13 +279,118 @@ def calc_time_to_targets(patient_record_measurements: pd.DataFrame,
             out[f"{t}%_wl_achieved"] = 1
             out[f"{t}%_wl_%"] = first_achieved_event["wl_pct_calculated"]
             out[f"{t}%_wl_date"] = first_achieved_event["measurement_date"]
-            out[f"days_to_{t}%_wl"] = (first_achieved_event["measurement_date"] - baseline_date).days + 1
+            out[f"days_to_{t}%_wl"] = (first_achieved_event["measurement_date"] - baseline_measurement_date).days + 1
         else:
             out[f"{t}%_wl_achieved"] = 0
             out[f"{t}%_wl_%"] = np.nan 
             out[f"{t}%_wl_date"] = pd.NaT
             out[f"days_to_{t}%_wl"] = np.nan
     return out
+
+def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) -> dict:
+    """
+    Returns genomics timing flags based on record-level dates.
+    Returns all NaN if genomics_results_date is missing or if record dates are missing.
+    Calculations are based on 'genomics results date': 
+    the date when the patient receives the results of their genetic test results, and from then on, the treatment is personalized. 
+    This can be: 
+    - within the medical record's validity
+    - - 3 weeks or X defined days within the start of the record (ie. most of the record is personalized)
+    - before the record's validity (ie. it was available from the start, so the whole record is personalized)
+    - after the recor's start: the record is not personalized, but its outcomes can be interpreted in light of the patient's genotype
+    - special case: some patients did a genetics test, but the results date is not available - the temporal relationship is unknown
+
+    Days from record start to first measurement or genomics result / first measurement to genomics result: to see the time passing between these events, 
+    and identify potential windows of missing but relevant data. 
+    """
+
+    out = {
+        'no_genomics_results_date': np.nan,
+        'genomics_within_record': np.nan,
+        'genomics_3wk_within_record_start': np.nan,
+        'genomics_1mo_within_record_start': np.nan,
+        'genomics_2mo_within_record_start': np.nan,
+        'genomics_before_record': np.nan,
+        'genomics_after_record': np.nan,
+
+        "record_start_to_first_measurement_d": np.nan,
+        "record_start_to_genomics_results_d": np.nan,
+        "first_measurement_to_genomics_results_d": np.nan,
+        "last_measurement_to_record_end_d": np.nan,
+    }
+
+    g_date = record_info.get('genomics_results_date')
+    baseline = record_info.get('baseline_measurement_date') # first measurement's date
+    final = overall_followup_dict.get('final_measurement_date') # last measurement's date
+    
+    # Ensure these names exactly match what is fetched in config.fetch_from_records
+    record_start = record_info.get('medical_record_creation_date')
+    record_end = record_info.get('medical_record_closing_date')
+
+    out['no_genomics_results_date'] = int(pd.isna(g_date))
+
+    if pd.notna(record_start) and pd.notna(baseline):
+        out['record_start_to_first_measurement_d'] = (baseline - record_start).days
+        
+    if pd.notna(record_start) and pd.notna(g_date):
+        out['record_start_to_genomics_results_d'] = (g_date - record_start).days
+        
+    if pd.notna(baseline) and pd.notna(g_date):
+        out['first_measurement_to_genomics_results_d'] = (g_date - baseline).days
+
+    if pd.notna(final) and pd.notna(record_end):
+        out['last_measurement_to_record_end_d'] = (record_end - final).days
+
+    # If any required date is missing, return NaNs for the flags
+    if pd.isna(g_date) or pd.isna(baseline) or pd.isna(final):
+        return out
+
+    within = (g_date >= baseline) and (g_date <= final)
+    out['genomics_within_record'] = int(within)
+    out['genomics_before_record'] = int(g_date < baseline)
+    out['genomics_after_record'] = int(g_date > final)
+
+    if within:
+        cutoff_21d = baseline + pd.Timedelta(days=21)
+        out['genomics_3wk_within_record_start'] = int(g_date <= cutoff_21d)
+        
+        cutoff_30d = baseline + pd.Timedelta(days=30)
+        out['genomics_1mo_within_record_start'] = int(g_date <= cutoff_30d)
+
+        cutoff_60d = baseline + pd.Timedelta(days=60)
+        out['genomics_2mo_within_record_start'] = int(g_date <= cutoff_60d)
+
+    return out
+
+def process_country_dummies(df: pd.DataFrame, output_column_order: list) -> tuple[pd.DataFrame, list, list]:
+    """
+    Processes country column to create dummy variables and updates the output_column_order.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame containing the 'country' column.
+        output_column_order (list): The list defining the desired order of output columns.
+        
+    Returns:
+        tuple[pd.DataFrame, list, list]: The modified DataFrame, updated output_column_order, and a list of generated dummy column names.
+    """
+    dummy_cols = []
+    if "country" in df.columns:
+        dummies = pd.get_dummies(df["country"], prefix="country", dtype=int)
+        df = pd.concat([df, dummies], axis=1)
+        dummy_cols = sorted(dummies.columns.tolist())
+        
+        # Inject dummy columns into output_column_order right after 'country'
+        if "country" in output_column_order:
+            idx = output_column_order.index("country")
+            # Insert in reverse order so they end up in correct forward order A, B, C...
+            for col in reversed(dummy_cols):
+                output_column_order.insert(idx + 1, col)
+        else:
+            # If country not in output list for some reason, append them
+            output_column_order.extend(dummy_cols)
+            
+    return df, output_column_order, dummy_cols
+
 
 '''
 2c. orchestration function - bring everything together
@@ -347,6 +453,11 @@ def build_timetoevent_table(config: master_config):
         time_to_targets = calc_time_to_targets(patient_group_measurements, record_info_with_baseline, timetoevent_config)
         out_dict.update(time_to_targets)
 
+        # 4) genomics timing
+
+        genomics_timing_dict = calc_genomics_timing(record_info_with_baseline, out_dict)
+        out_dict.update(genomics_timing_dict)
+
         output_rows.append(out_dict)
 
     df_out = pd.DataFrame(output_rows)
@@ -371,36 +482,6 @@ def build_timetoevent_table(config: master_config):
         print(f"  - Generated {len(dummy_cols)} country dummy columns: {dummy_cols}")
 
 
-def process_country_dummies(df: pd.DataFrame, output_column_order: list) -> tuple[pd.DataFrame, list, list]:
-    """
-    Processes country column to create dummy variables and updates the output_column_order.
-    
-    Args:
-        df (pd.DataFrame): The DataFrame containing the 'country' column.
-        output_column_order (list): The list defining the desired order of output columns.
-        
-    Returns:
-        tuple[pd.DataFrame, list, list]: The modified DataFrame, updated output_column_order, and a list of generated dummy column names.
-    """
-    dummy_cols = []
-    if "country" in df.columns:
-        dummies = pd.get_dummies(df["country"], prefix="country", dtype=int)
-        df = pd.concat([df, dummies], axis=1)
-        dummy_cols = sorted(dummies.columns.tolist())
-        
-        # Inject dummy columns into output_column_order right after 'country'
-        if "country" in output_column_order:
-            idx = output_column_order.index("country")
-            # Insert in reverse order so they end up in correct forward order A, B, C...
-            for col in reversed(dummy_cols):
-                output_column_order.insert(idx + 1, col)
-        else:
-            # If country not in output list for some reason, append them
-            output_column_order.extend(dummy_cols)
-            
-    return df, output_column_order, dummy_cols
-
-
 def subset_timetoevent_table(config: master_config) -> None:
     """
     Creates subset tables from a source table based on a dictionary of definitions.
@@ -421,25 +502,28 @@ def subset_timetoevent_table(config: master_config) -> None:
 
             # Iterate directly over the dictionary of definitions
             for output_table, conditions in subset_definitions.items():
-                
-                # Separate conditions into existence checks (columns must be non-null) and value checks (col == val)
-                cols_to_check_existence = []
-                value_filters = []
 
+                cols_to_check_existence = []
+                cols_to_check_absence = []
+                value_filters = []
+                
                 for cond in conditions:
                     if isinstance(cond, str):
                         cols_to_check_existence.append(cond)
                     elif isinstance(cond, (list, tuple)) and len(cond) == 2:
-                        value_filters.append(cond)
+                        if cond[1] == "IS_NULL":
+                            cols_to_check_absence.append(cond[0])
+                        else:
+                            value_filters.append(cond)
                     else:
-                        print(f"  - Warning: Invalid condition format '{cond}' for table '{output_table}'. Skipping.")
-
+                        print(f" - Warning: Invalid condition format '{cond}' for table '{output_table}'. Skipping.")
+                
                 # Check if all required columns exist in the DataFrame
-                required_cols = cols_to_check_existence + [c for c, _ in value_filters]
+                required_cols = cols_to_check_existence + cols_to_check_absence + [c for c, _ in value_filters]
                 missing_cols = [col for col in required_cols if col not in source_df.columns]
                 
                 if missing_cols:
-                    print(f"  - Warning: Skipping table '{output_table}' because columns {missing_cols} were not found.")
+                    print(f" - Warning: Skipping table '{output_table}' because columns {missing_cols} were not found.")
                     continue
 
                 # Apply Filtering
@@ -448,8 +532,12 @@ def subset_timetoevent_table(config: master_config) -> None:
                 # 1. Existence Check (Not Null)
                 if cols_to_check_existence:
                     subset_df = subset_df.dropna(subset=cols_to_check_existence)
+                    
+                # 2. Absence Check (Is Null)
+                for col in cols_to_check_absence:
+                    subset_df = subset_df[subset_df[col].isna()]
 
-                # 2. Value Check (Equality)
+                # 3. Value Check (Equality)
                 for col, val in value_filters:
                     subset_df = subset_df[subset_df[col] == val]
 

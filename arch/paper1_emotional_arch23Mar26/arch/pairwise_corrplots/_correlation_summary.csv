@@ -1,0 +1,7 @@
+Scenario,X_Variable,Y_Variable,Correlation,P_Value,N_Pairs
+total_wl%_quantity_control,total_wl_%,hunger_yn,-0.01164651830359608,0.702887677596966,1075
+total_wl%_vs_satiety_yn,total_wl_%,satiety_yn,0.02644579794608963,0.38460056911282564,1083
+total_wl%_vs_emotional_eating_yn,total_wl_%,emotional_eating_yn,0.021214596748249354,0.4682881244508132,1171
+total_wl%_vs_emotional_eating_value,total_wl_%,emotional_eating_value_likert,0.03495508302185014,0.2319907634412579,1171
+total_wl%_vs_quantity_control,total_wl_%,quantity_control_likert,0.04827128809514314,0.11421063826123969,1072
+total_wl%_vs_impulse_control,total_wl_%,impulse_control_likert,-0.0015932407700407908,0.9590124772213822,1043
