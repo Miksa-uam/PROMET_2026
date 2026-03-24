@@ -1,0 +1,16 @@
+variable,variable_type,percent_change_formatted,p_value_raw_formatted,p_value_fdr_formatted,significance
+Sex (% of females),categorical,+3.5%,0.001,0.010,**
+Age (years),continuous,-2.0%,0.000,0.001,**
+Baseline weight (kg),continuous,-0.6%,0.054,0.100,
+Follow-up length (days),continuous,+2.8%,0.216,0.334,
+Number of visits,continuous,+26.2%,0.000,0.000,**
+Instant dropouts (n),categorical,-18.0%,0.035,0.079,*
+40-day dropouts (n),categorical,-8.5%,0.006,0.029,**
+60-day dropouts (n),categorical,-4.8%,0.048,0.096,*
+Total weight loss (%),continuous,+6.1%,0.000,0.006,**
+Achieved 5% weight loss (n),categorical,+3.2%,0.016,0.045,**
+Days to 5% weight loss,continuous,-5.6%,0.009,0.035,**
+Achieved 10% weight loss (n),categorical,+8.6%,0.000,0.006,**
+Days to 10% weight loss,continuous,-3.4%,0.063,0.114,
+Achieved 15% weight loss (n),categorical,+9.3%,0.018,0.047,**
+Days to 15% weight loss,continuous,+0.3%,0.872,1.000,

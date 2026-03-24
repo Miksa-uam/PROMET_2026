@@ -1,0 +1,12 @@
+"womens_health_and_pregnancy",
+"mental_health",
+"family_issues",
+"medication_disease_injury",
+"physical_inactivity",
+"eating_habits",
+"schedule",
+"smoking_cessation",
+"treatment_discontinuation_or_relapse", 
+"pandemic",
+"lifestyle_circumstances", 
+"none_of_above"

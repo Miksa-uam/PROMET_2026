@@ -1,0 +1,13 @@
+Category,Krippendorff Alpha
+womens_health_and_pregnancy,0.959
+mental_health,0.922
+family_issues,0.904
+medication_disease_injury,0.909
+physical_inactivity,0.907
+eating_habits,0.956
+schedule,0.605
+smoking_cessation,1.0
+treatment_discontinuation_or_relapse,0.65
+pandemic,0.983
+lifestyle_circumstances,0.756
+none_of_above,0.784

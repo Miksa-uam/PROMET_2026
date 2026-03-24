@@ -1,0 +1,4 @@
+Exact Match %,Label Accuracy (1-Hamming) %,Avg Jaccard,Comparison Model
+83.0,97.75,0.888,GPT-4.1 (t=0)
+67.0,95.83,0.791,GPT-4o-Mini (t=0)
+76.0,96.92,0.84,GPT-5.2 (t=0)
