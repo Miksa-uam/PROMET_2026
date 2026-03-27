@@ -1,0 +1,69 @@
+REGRESSION ANALYSIS v2: GROUP-AGNOSTIC + TIME-VARYING COX
+=================================================================
+
+
+Model A: OLS 60d WL% [group-agnostic]
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:             wl_60d_pct   R-squared:                       0.044
+Model:                            OLS   Adj. R-squared:                  0.040
+Method:                 Least Squares   F-statistic:                     11.01
+Date:                Tue, 24 Mar 2026   Prob (F-statistic):           9.96e-09
+Time:                        16:27:47   Log-Likelihood:                -2573.4
+No. Observations:                 955   AIC:                             5157.
+Df Residuals:                     950   BIC:                             5181.
+Df Model:                           4                                         
+Covariance Type:            nonrobust                                         
+====================================================================================
+                       coef    std err          t      P>|t|      [0.025      0.975]
+------------------------------------------------------------------------------------
+Intercept          -11.4156      1.512     -7.548      0.000     -14.384      -8.448
+days_to_genomics    -0.0003      0.001     -0.224      0.823      -0.003       0.002
+age                  0.0448      0.012      3.817      0.000       0.022       0.068
+sex_f                1.3311      0.320      4.155      0.000       0.702       1.960
+baseline_bmi        -0.0823      0.040     -2.061      0.040      -0.161      -0.004
+==============================================================================
+Omnibus:                      123.704   Durbin-Watson:                   1.818
+Prob(Omnibus):                  0.000   Jarque-Bera (JB):              242.386
+Skew:                           0.783   Prob(JB):                     2.33e-53
+Kurtosis:                       4.908   Cond. No.                     1.51e+03
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+[2] The condition number is large, 1.51e+03. This might indicate that there are
+strong multicollinearity or other numerical problems.
+
+
+Model B: OLS 120d WL% [group-agnostic]
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:            wl_120d_pct   R-squared:                       0.090
+Model:                            OLS   Adj. R-squared:                  0.084
+Method:                 Least Squares   F-statistic:                     15.40
+Date:                Tue, 24 Mar 2026   Prob (F-statistic):           5.14e-12
+Time:                        16:27:47   Log-Likelihood:                -1913.7
+No. Observations:                 626   AIC:                             3837.
+Df Residuals:                     621   BIC:                             3860.
+Df Model:                           4                                         
+Covariance Type:            nonrobust                                         
+====================================================================================
+                       coef    std err          t      P>|t|      [0.025      0.975]
+------------------------------------------------------------------------------------
+Intercept           -5.6237      2.905     -1.936      0.053     -11.328       0.080
+days_to_genomics    -0.0008      0.002     -0.371      0.710      -0.005       0.004
+age                  0.0842      0.020      4.122      0.000       0.044       0.124
+sex_f               -0.3281      0.639     -0.514      0.608      -1.582       0.926
+baseline_bmi        -0.4263      0.074     -5.766      0.000      -0.572      -0.281
+==============================================================================
+Omnibus:                       35.636   Durbin-Watson:                   1.926
+Prob(Omnibus):                  0.000   Jarque-Bera (JB):               40.258
+Skew:                           0.592   Prob(JB):                     1.81e-09
+Kurtosis:                       3.379   Cond. No.                     1.83e+03
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+[2] The condition number is large, 1.83e+03. This might indicate that there are
+strong multicollinearity or other numerical problems.
+
