@@ -2,8 +2,10 @@ import pandas as pd
 import os
 import sqlite3
 import unicodedata
+import numpy as np
 
-"""TO NOT USE TEMP PANDAS DATA FRAMES ALL THE TIME - BUT LOAD DFS FROM SQL DBS"""
+
+"""HELPER TO NOT USE TEMP PANDAS DATA FRAMES ALL THE TIME - BUT LOAD DFS FROM SQL DBS"""
 
 def load_table(db_path, table_name, fallback_df=None, parse_dates=None):
     """
@@ -48,6 +50,7 @@ def _normalize_string(value):
     value = unicodedata.normalize('NFKD', value).encode('ASCII', 'ignore').decode('utf-8')
     return value.lower()
 
+# Standardize the prescriptions table
 def standardize_prescriptions(df, column_names, value_dict, column_order):
     """
     Renames columns, translates values, enforces datetimes, reorders and sorts.
@@ -71,6 +74,8 @@ def standardize_prescriptions(df, column_names, value_dict, column_order):
     df = df.sort_values(by=['patient_id', 'prescription_creation_date'])
     return df
 
+
+# Standardize the patients table
 def standardize_patients(df, column_names, value_dict, column_order):
     """
     Renames columns, translates values, enforces datetimes, reorders and sorts.
@@ -93,13 +98,13 @@ def standardize_patients(df, column_names, value_dict, column_order):
     return df
 
 
+# Standardize the comorbidities & drug prescriptions table
 def standardize_comorbidities(df, column_names, value_dict, column_order):
     """
     Renames columns, translates Spanish values (comorbidities, drugs, doses, binary),
     enforces datetime, reorders and sorts.
     All config (column_names, value_dict, column_order) is passed in from the notebook.
     """
-    df = df.copy()
     df = df.rename(columns=column_names)
 
     if 'creation_date' in df.columns:
@@ -115,7 +120,6 @@ def standardize_comorbidities(df, column_names, value_dict, column_order):
     df = df.sort_values(by=['patient_id', 'medical_record_id', 'creation_date'])
     return df
 
-
 def pivot_comorbidities(comorbidities_colclean):
     """
     Identifies unique comorbidities and medications from the first prescription
@@ -123,7 +127,6 @@ def pivot_comorbidities(comorbidities_colclean):
     Duplicate comorbidities or drugs within the same first prescription are counted only once.
     No config needed — operates entirely on the data it receives.
     """
-    import numpy as np
 
     comorbidities = comorbidities_colclean.copy()
     comorbidities['creation_date'] = pd.to_datetime(comorbidities['creation_date'])
@@ -219,7 +222,8 @@ def pivot_comorbidities(comorbidities_colclean):
     else:
         drugs_wide = pd.DataFrame(columns=['patient_id', 'medical_record_id'])
 
-    # Step 5: Merge comorbidities and drugs wide tables
+    # Step 5: Merge the wide comorbidities and drugs tables
+    # Ensure base IDs are present for merging, especially if one part is empty
     if not comorbidities_wide.empty and not drugs_wide.empty:
         comorbidities_pivoted = pd.merge(
             comorbidities_wide, drugs_wide,
@@ -229,15 +233,16 @@ def pivot_comorbidities(comorbidities_colclean):
         comorbidities_pivoted = comorbidities_wide
     elif not drugs_wide.empty:
         comorbidities_pivoted = drugs_wide
-    else:
+    else: # Both are empty, start with unique IDs
         comorbidities_pivoted = unique_ids.copy()
 
+    # Ensure all unique_ids are present in the final df, even if they had no comorbidities/drugs
     if not unique_ids.empty:
         comorbidities_pivoted = pd.merge(
             unique_ids, comorbidities_pivoted,
             on=['patient_id', 'medical_record_id'], how='left'
         )
-    else:
+    else: # If unique_ids is also empty (i.e. comorbidities_baseline_long was empty)
         return pd.DataFrame(columns=['patient_id', 'medical_record_id'])
 
     # Step 6: Order columns — interleave comorbidity/drug pairs
@@ -254,12 +259,12 @@ def pivot_comorbidities(comorbidities_colclean):
     return comorbidities_pivoted[final_ordered_columns]
 
 
+# Standardize the medical records table
 def standardize_medical_records(df, column_names, value_dict, column_order):
     """
-    Renames columns, translates values, enforces datetimes, zeros out wc nulls,
+    Renames columns, translates values, enforces datetimes, sets given 0 values to NULL,
     reorders and sorts. All config passed in from the notebook.
     """
-    import numpy as np
 
     df = df.rename(columns=column_names)
 
@@ -279,7 +284,6 @@ def standardize_medical_records(df, column_names, value_dict, column_order):
     df = df[column_order]
     df = df.sort_values(by=['medical_record_id', 'medical_record_creation_date'])
     return df
-
 
 def complete_medical_records(
     medical_records_colclean,
@@ -308,24 +312,29 @@ def complete_medical_records(
     # --- merge helpers (purely mechanical, no config needed) ---
 
     def add_patient_id(df, prescriptions_colclean):
+        """Adds patient_id from prescriptions table based on medical_record_id."""
         patient_ids = (prescriptions_colclean[['patient_id', 'medical_record_id']]
                        .drop_duplicates(subset=['medical_record_id']))
         return df.merge(patient_ids, on='medical_record_id', how='left')
 
     def add_patient_sex(df, patients_colclean):
+        """Adds sex data from patients table based on patient_id."""
         sex = patients_colclean[['patient_id', 'sex_f']].drop_duplicates(subset=['patient_id'])
         return df.merge(sex, on='patient_id', how='left')
 
     def add_patient_country(df, patients_colclean):
+        """Adds country data from patients table based on patient_id."""
         country = patients_colclean[['patient_id', 'country']].drop_duplicates(subset=['patient_id'])
         return df.merge(country, on='patient_id', how='left')
 
     def add_genomics_sample_id(df, patients_colclean):
+        """Adds genomics_sample_id from patients table based on patient_id."""
         genomics = (patients_colclean[['patient_id', 'genomics_sample_id']]
                     .drop_duplicates(subset=['patient_id']))
         return df.merge(genomics, on='patient_id', how='left')
 
     def add_genomics_dates(df, prescriptions_colclean):
+        """Adds genomic test processing-related dates from prescriptions table based on medical_record_id."""
         genomics_dates = (prescriptions_colclean[[
             'medical_record_id',
             'genomics_prescription_date', 'genomics_purchase_date',
@@ -333,37 +342,45 @@ def complete_medical_records(
         ]].drop_duplicates(subset=['medical_record_id']))
         return df.merge(genomics_dates, on='medical_record_id', how='left')
 
+    def add_gdpr_data(df, patients_colclean):
+        """Adds GDPR4 and GDPR10 true/false values and dates from patients table based on patient_id."""
+        gdpr = (patients_colclean[['patient_id', 'gdpr4', 'gdpr4_date', 'gdpr10', 'gdpr10_date']]
+                .drop_duplicates(subset=['patient_id']))
+        return df.merge(gdpr, on='patient_id', how='left')
+
     def add_comorbidities(df, comorbidities_wide):
+        """Adds baseline comorbidities from comorbidities_wide based on patient and medical record IDs.""" 
         return pd.merge(df, comorbidities_wide.copy(),
                         on=['patient_id', 'medical_record_id'], how='left')
 
     def add_wg_causes(df, wg_causes_db_path):
+        """Adds categorized weight gain causes from the dedicated SQLite database - currently a hardcoded path, this could be improved."""
         with sqlite3.connect(wg_causes_db_path) as conn:
             df_wg = pd.read_sql_query("SELECT * FROM weight_gain_causes", conn)
         return pd.merge(df, df_wg,
                         on=['patient_id', 'medical_record_id', 'weight_gain_cause'],
                         how='left')
 
-    def add_gdpr_data(df, patients_colclean):
-        gdpr = (patients_colclean[['patient_id', 'gdpr4', 'gdpr4_date', 'gdpr10', 'gdpr10_date']]
-                .drop_duplicates(subset=['patient_id']))
-        return df.merge(gdpr, on='patient_id', how='left')
-
     def calculate_record_duration(df):
+        """Calculates the duration of the medical record in days."""
         df['medical_record_duration_days'] = (
             df['medical_record_closing_date'] - df['medical_record_creation_date']
         ).dt.days
         return df
 
     def add_record_counts_and_sequence(df):
+        """Adds columns for the total number of records per patient and the sequence of each record."""
+        # Sort by patient and date to ensure correct sequencing
         df = df.sort_values(by=['patient_id', 'medical_record_creation_date'])
+        # Calculate sequence number within each patient group
         df['medical_record_sequence'] = df.groupby('patient_id').cumcount() + 1
+        # Calculate total number of records per patient
         df['nr_medical_records_patient'] = (
             df.groupby('patient_id')['medical_record_id'].transform('nunique')
         )
         return df
 
-    # --- pipeline execution ---
+    # Execute completion steps
     df = add_patient_id(df, prescriptions_colclean)
     df = add_patient_sex(df, patients_colclean)
     df = add_patient_country(df, patients_colclean)
@@ -375,11 +392,13 @@ def complete_medical_records(
     df = calculate_record_duration(df)
     df = add_record_counts_and_sequence(df)
 
+    # Ensure final column order and sort rows
     df = df[complete_column_order]
     df = df.sort_values(by=['patient_id', 'medical_record_creation_date'])
     return df
 
-
+  
+# Standardize and filter the measurements table
 def standardize_measurements(df, column_names, column_order):
     """Renames columns to standardized English names, reorders, enforces datetime, sorts."""
     # Rename columns to standardized English names
@@ -391,7 +410,6 @@ def standardize_measurements(df, column_names, column_order):
     # Sort rows by patient_id and measurement_date
     df = df.sort_values(by=['patient_id', 'measurement_date'])
     return df
-
 
 def rowclean_measurements(measurements_colclean):
     """Logic: 
@@ -414,7 +432,6 @@ def rowclean_measurements(measurements_colclean):
     measurements_rowclean = measurements_rowclean.drop(columns=['measurement_date_date', 'weight_kg_rounded'])
     measurements_rowclean = measurements_rowclean.sort_values(by=['patient_id', 'measurement_date'])
     return measurements_rowclean
-
 
 def complete_measurements(
     measurements_rowclean,
@@ -640,6 +657,7 @@ def complete_measurements(
     return measurements_complete_unfiltered, out_range_measurements
 
 
+# Standardize the alleles table
 def standardize_alleles(df, column_names, column_order):
     """
     Renames columns, enforces datetime, standardises lab names,
@@ -663,7 +681,6 @@ def standardize_alleles(df, column_names, column_order):
     if 'genomics_sample_id' in df.columns:
         df = df.sort_values(by='genomics_sample_id')
     return df
-
 
 def complete_alleles(
     alleles_colclean,
