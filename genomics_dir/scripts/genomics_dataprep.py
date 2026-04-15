@@ -297,7 +297,7 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
     - within the medical record's validity
     - - 3 weeks or X defined days within the start of the record (ie. most of the record is personalized)
     - before the record's validity (ie. it was available from the start, so the whole record is personalized)
-    - after the recor's start: the record is not personalized, but its outcomes can be interpreted in light of the patient's genotype
+    - after the record's end: the record is not personalized, but its outcomes can be interpreted in light of the patient's genotype
     - special case: some patients did a genetics test, but the results date is not available - the temporal relationship is unknown
 
     Days from record start to first measurement or genomics result / first measurement to genomics result: to see the time passing between these events, 
@@ -306,12 +306,20 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
 
     out = {
         'no_genomics_results_date': np.nan,
+        # Relationship of genomics timing with medical record validity period - the time when the record was open on paper
         'genomics_within_record': np.nan,
         'genomics_3wk_within_record_start': np.nan,
         'genomics_1mo_within_record_start': np.nan,
         'genomics_2mo_within_record_start': np.nan,
         'genomics_before_record': np.nan,
         'genomics_after_record': np.nan,
+        # Relationship of genomics timing with period of observed active measurements - the time when the patient was actively measuring themselves
+        'genomics_within_observation_period': np.nan,
+        'genomics_3wk_within_1st_measurement': np.nan,
+        'genomics_1mo_within_1st_measurement': np.nan,
+        'genomics_2mo_within_1st_measurement': np.nan,
+        'genomics_before_1st_measurement': np.nan,
+        'genomics_after_last_measurement': np.nan,
 
         "record_start_to_first_measurement_d": np.nan,
         "record_start_to_genomics_results_d": np.nan,
@@ -319,46 +327,60 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
         "last_measurement_to_record_end_d": np.nan,
     }
 
-    g_date = record_info.get('genomics_results_date')
-    baseline = record_info.get('baseline_measurement_date') # first measurement's date
-    final = overall_followup_dict.get('final_measurement_date') # last measurement's date
-    
-    # Ensure these names exactly match what is fetched in config.fetch_from_records
+    # Get medical record, genomics, and measurement dates
     record_start = record_info.get('medical_record_creation_date')
     record_end = record_info.get('medical_record_closing_date')
+    g_date = record_info.get('genomics_results_date')
+    baseline_meas = record_info.get('baseline_measurement_date') # first measurement's date
+    final_meas = overall_followup_dict.get('final_measurement_date') # last measurement's date
 
     out['no_genomics_results_date'] = int(pd.isna(g_date))
 
-    if pd.notna(record_start) and pd.notna(baseline):
-        out['record_start_to_first_measurement_d'] = (baseline - record_start).days
+    if pd.notna(record_start) and pd.notna(baseline_meas):
+        out['record_start_to_first_measurement_d'] = (baseline_meas - record_start).days
         
     if pd.notna(record_start) and pd.notna(g_date):
         out['record_start_to_genomics_results_d'] = (g_date - record_start).days
         
-    if pd.notna(baseline) and pd.notna(g_date):
-        out['first_measurement_to_genomics_results_d'] = (g_date - baseline).days
+    if pd.notna(baseline_meas) and pd.notna(g_date):
+        out['first_measurement_to_genomics_results_d'] = (g_date - baseline_meas).days
 
-    if pd.notna(final) and pd.notna(record_end):
-        out['last_measurement_to_record_end_d'] = (record_end - final).days
+    if pd.notna(final_meas) and pd.notna(record_end):
+        out['last_measurement_to_record_end_d'] = (record_end - final_meas).days
 
     # If any required date is missing, return NaNs for the flags
-    if pd.isna(g_date) or pd.isna(baseline) or pd.isna(final):
+    if pd.isna(g_date) or pd.isna(baseline_meas) or pd.isna(final_meas):
         return out
 
-    within = (g_date >= baseline) and (g_date <= final)
-    out['genomics_within_record'] = int(within)
-    out['genomics_before_record'] = int(g_date < baseline)
-    out['genomics_after_record'] = int(g_date > final)
+    within_record = (g_date >= record_start) and (g_date <= record_end)
+    out['genomics_within_record'] = int(within_record)
+    out['genomics_before_record'] = int(g_date < record_start)
+    out['genomics_after_record'] = int(g_date > record_end)
 
-    if within:
-        cutoff_21d = baseline + pd.Timedelta(days=21)
+    if within_record:
+        cutoff_21d = record_start + pd.Timedelta(days=21)
         out['genomics_3wk_within_record_start'] = int(g_date <= cutoff_21d)
         
-        cutoff_30d = baseline + pd.Timedelta(days=30)
+        cutoff_30d = record_start + pd.Timedelta(days=30)
         out['genomics_1mo_within_record_start'] = int(g_date <= cutoff_30d)
 
-        cutoff_60d = baseline + pd.Timedelta(days=60)
+        cutoff_60d = record_start + pd.Timedelta(days=60)
         out['genomics_2mo_within_record_start'] = int(g_date <= cutoff_60d)
+
+    within_observation_period = (g_date >= record_start) and (g_date <= record_end)
+    out['genomics_within_observation_period'] = int(within_record)
+    out['genomics_before_1st_measurement'] = int(g_date < record_start)
+    out['genomics_after_last_measurement'] = int(g_date > record_end)
+
+    if within_record:
+        cutoff_21d = record_start + pd.Timedelta(days=21)
+        out['genomics_3wk_within_1st_measurement'] = int(g_date <= cutoff_21d)
+        
+        cutoff_30d = record_start + pd.Timedelta(days=30)
+        out['genomics_1mo_within_1st_measurement'] = int(g_date <= cutoff_30d)
+
+        cutoff_60d = record_start + pd.Timedelta(days=60)
+        out['genomics_2mo_within_1st_measurement'] = int(g_date <= cutoff_60d)
 
     return out
 
