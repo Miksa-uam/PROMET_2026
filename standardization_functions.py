@@ -411,27 +411,140 @@ def standardize_measurements(df, column_names, column_order):
     df = df.sort_values(by=['patient_id', 'measurement_date'])
     return df
 
-def rowclean_measurements(measurements_colclean):
-    """Logic: 
-    a copy of measurements colclean is called
-    a temporary column that holds only the date part of the measurement date is created
-    along with another one that rounds the weight to the nearest integer
-    duplicates are dropped if the patient id, date part of measurement date, and the rounded weight are the same, keeping the last measurement
-    warning: if there are several measurements within a day with different rounded weights, they are both kept
-    temporary columns are dropped
-    output is sorted by patient id and measurement date
-    output is saved to _colclean sqlite
+# def rowclean_measurements(measurements_colclean):
+#     """Logic: 
+#     a copy of measurements colclean is called
+#     a temporary column that holds only the date part of the measurement date is created
+#     along with another one that rounds the weight to the nearest integer
+#     duplicates are dropped if the patient id, date part of measurement date, and the rounded weight are the same, keeping the last measurement
+#     warning: if there are several measurements within a day with different rounded weights, they are both kept
+#     temporary columns are dropped
+#     output is sorted by patient id and measurement date
+#     output is saved to _colclean sqlite
+#     """
+#     measurements_rowclean = measurements_colclean.copy()
+#     measurements_rowclean['measurement_date_date'] = measurements_rowclean['measurement_date'].dt.date
+#     measurements_rowclean['weight_kg_rounded'] = measurements_rowclean['weight_kg'].round(0)
+#     measurements_rowclean = measurements_rowclean.drop_duplicates(
+#         subset=['patient_id', 'measurement_date_date', 'weight_kg_rounded'],
+#         keep='last'
+#     )
+#     measurements_rowclean = measurements_rowclean.drop(columns=['measurement_date_date', 'weight_kg_rounded'])
+#     measurements_rowclean = measurements_rowclean.sort_values(by=['patient_id', 'measurement_date'])
+#     return measurements_rowclean
+
+def rowclean_measurements(
+    measurements_colclean,
+    first_height_lookup,               # NEW — pd.DataFrame with [patient_id, height_m]
+    bc_vars           = None,
+    water_col         = "water_%",
+    water_floor       = 30.0,
+    bmi_disc_thresh   = 5.0,
+    weight_floor      = 30.0,
+    bmi_floor         = 15.0,):
     """
-    measurements_rowclean = measurements_colclean.copy()
-    measurements_rowclean['measurement_date_date'] = measurements_rowclean['measurement_date'].dt.date
-    measurements_rowclean['weight_kg_rounded'] = measurements_rowclean['weight_kg'].round(0)
-    measurements_rowclean = measurements_rowclean.drop_duplicates(
-        subset=['patient_id', 'measurement_date_date', 'weight_kg_rounded'],
-        keep='last'
+    Row-level cleaning for measurements. Operates in two stages:
+
+    Stage 1 — BC quality filtering (before deduplication):
+      Joins first height per patient and recalculates BMI.
+      2a. water_% < water_floor            → all BC → NULL
+      2b. |bmi_recorded - bmi_calc| ≥ threshold → all BC → NULL
+      2c. Any BC value still ≤ 0 in a row  → all BC in that row → NULL
+      Drops rows where weight < 30 kg OR bmi_calculated < 15.
+      Drops transient height_m (re-enters later via complete_measurements).
+
+    Stage 2 — Deduplication:
+      Same-day, same-rounded-weight duplicates are dropped (keep last).
+      Rows with multiple measurements on the same day at different weights
+      are both retained with a warning.
+    """
+    if bc_vars is None:
+        bc_vars = ["water_%", "muscle_%", "fat_%", "vat_%"]
+
+    df = measurements_colclean.copy()
+    n_start = len(df)
+
+    # ── Row-level cleaning Stage 1: BC filtering - setting unreliable body composition entries to NULL 
+    # while keeping weight and BMI recalculated based on height (originally recorded BMI not always reliable)
+
+    df = df.merge(first_height_lookup, on="patient_id", how="left")
+    df["bmi_calculated"]    = (df["weight_kg"] / df["height_m"] ** 2).round(2)
+    df["bmi_rec_calc_diff"] = (df["bmi"] - df["bmi_calculated"]).abs()
+
+    """!!! - originally recorded bmi is REPLACED here with a value recalculated on the spot from height and weight """ 
+    # — Replace recorded BMI with recalculated; keep recorded as audit —
+    df = df.rename(columns={"bmi": "bmi_recorded"})
+    df["bmi"] = df["bmi_calculated"]
+    df = df.drop(columns=["bmi_calculated"])  # no longer needed — bmi now holds it
+
+    print(f"\n  [2a] {water_col} < {water_floor} → all BC → NULL")
+    mask_low_water = df[water_col] < water_floor
+    for col in bc_vars:
+        if col in df.columns:
+            n_nn = df.loc[mask_low_water, col].notna().sum()
+            df.loc[mask_low_water, col] = None
+            print(f"    {col:12s}  low-water rows nullified: {n_nn:>6,}")
+    print(f"    Total rows affected: {int(mask_low_water.sum()):>6,}  "
+          f"({mask_low_water.sum() / n_start * 100:.2f}%)")
+
+    print(f"\n  [2b] bmi_rec_calc_diff ≥ {bmi_disc_thresh} → all BC → NULL")
+    mask_disc = df["bmi_rec_calc_diff"] >= bmi_disc_thresh
+    for col in bc_vars:
+        if col in df.columns:
+            n_nn = df.loc[mask_disc, col].notna().sum()
+            df.loc[mask_disc, col] = None
+            print(f"    {col:12s}  discordant rows nullified: {n_nn:>6,}")
+    print(f"    Total rows affected: {int(mask_disc.sum()):>6,}  "
+          f"({mask_disc.sum() / n_start * 100:.2f}%)")
+
+    print("\n  [2c] Any zero / negative BC in row → all BC → NULL")
+    present_bc   = [c for c in bc_vars if c in df.columns]
+    mask_nonpos  = df[present_bc].le(0).any(axis=1)
+    n_nonpos     = int(mask_nonpos.sum())
+    for col in present_bc:
+        n_nn = df.loc[mask_nonpos, col].notna().sum()
+        df.loc[mask_nonpos, col] = None
+        print(f"    {col:12s}  nonpos-row nullified: {n_nn:>6,}")
+    print(f"    Total rows affected: {n_nonpos:>6,}  ({n_nonpos / n_start * 100:.2f}%)")
+
+    print("\n  [row drop] weight < 30 kg OR bmi < 15")
+    mask_drop = (df["weight_kg"] < weight_floor) | (df["bmi"] < bmi_floor)
+    n_dropped = int(mask_drop.sum())
+    df        = df[~mask_drop].copy()
+    print(f"    Rows dropped: {n_dropped:>6,}  ({n_dropped / n_start * 100:.2f}%)")
+
+    # height_m is a transient join key — drop it before deduplication.
+    # It re-enters via medical_records_complete in complete_measurements.
+    df = df.drop(columns=["height_m"], errors="ignore")
+
+    # ── Row-level cleaning Stage 2: Deduplication - remove duplicate measurements to keep one valid measurement a day
+
+    df["_date"]           = df["measurement_date"].dt.date
+    df["_weight_rounded"] = df["weight_kg"].round(0)
+
+    n_pre_dedup = len(df)
+    df = df.drop_duplicates(
+        subset=["patient_id", "_date", "_weight_rounded"],
+        keep="last",
     )
-    measurements_rowclean = measurements_rowclean.drop(columns=['measurement_date_date', 'weight_kg_rounded'])
-    measurements_rowclean = measurements_rowclean.sort_values(by=['patient_id', 'measurement_date'])
-    return measurements_rowclean
+
+    multi_weight = (
+        df.groupby(["patient_id", "_date"])["_weight_rounded"]
+        .nunique()
+        .gt(1)
+        .sum()
+    )
+    if multi_weight > 0:
+        print(f"\n  ⚠  {multi_weight:,} patient-days have >1 distinct rounded weight "
+              f"— all retained.")
+
+    df = df.drop(columns=["_date", "_weight_rounded"])
+    df = df.sort_values(by=["patient_id", "measurement_date"])
+
+    print(f"\n  Deduplication: {n_pre_dedup:,} → {len(df):,} rows "
+          f"({n_pre_dedup - len(df):,} removed)")
+    print(f"\n  rowclean_measurements total: {n_start:,} → {len(df):,} rows")
+    return df
 
 def complete_measurements(
     measurements_rowclean,
@@ -460,12 +573,15 @@ def complete_measurements(
         tuple: (measurements_complete_unfiltered, out_range_measurements)
     """
 
-    # Setup and data preparation: define permissivity days in the function arguments, ensure datetime format for date columns. 
-    # A permissivity window of 10 days is clinically reasonable;
-    # enough to catch measurements right before or after a record's validity period, but not too long to introduce bias or noise. 
-    # Upon discussion with stakeholders, we are settling with 10 days. 
-    # This causes the loss of about 100k out of 500k measurements, most of them are either between 11-1500 days far from a record's validity period, 
-    # or are derived from records with no registered end date. 
+    """
+    Setup and data preparation: define permissivity days in the function arguments, ensure datetime format for date columns. 
+    A permissivity window of 10 days is clinically reasonable;
+    enough to catch measurements right before or after a record's validity period, but not too long to introduce bias or noise. 
+    Upon discussion with stakeholders, we are settling with 10 days. 
+    This causes the loss of about 100k out of 500k measurements, most of them are either between 11-1500 days far from a record's validity period, 
+    or are derived from records with no registered end date. 
+    """
+
     measurements_rowclean['measurement_date'] = pd.to_datetime(measurements_rowclean['measurement_date'])
     medical_records_complete['medical_record_creation_date'] = pd.to_datetime(
         medical_records_complete['medical_record_creation_date']
@@ -474,12 +590,15 @@ def complete_measurements(
         medical_records_complete['medical_record_closing_date']
     )
 
-    # Step 1: link every measurement to every medical record it can possibly belong to based on Patient ID. 
+    """
+    Step 1: link every measurement to every medical record it can possibly belong to based on Patient ID. 
 
-    # We use the rowcleaned measurements that have duplicates removed, and the completed medical records, that have the patient IDs associated. 
-    # As a measurement can come from several record of a patient, we first need to find out, which are the possible record a measurement can belong to. 
-    # In later steps, these records are filtered to identify those measurement-record pairs where the measurement is actually within, or very close to, the time range of the record. 
-    # Mathematically, this dataframe where every possible link is established, is called a cartesian product, so the variable is named 'cartesian' accordingly. 
+    We use the rowcleaned measurements that have duplicates removed, and the completed medical records, that have the patient IDs associated. 
+    As a measurement can come from several record of a patient, we first need to find out, which are the possible record a measurement can belong to. 
+    In later steps, these records are filtered to identify those measurement-record pairs where the measurement is actually within, or very close to, the time range of the record. 
+    Mathematically, this dataframe where every possible link is established, is called a cartesian product, so the variable is named 'cartesian' accordingly. 
+    """
+    
     cartesian = pd.merge(
         measurements_rowclean,
         medical_records_complete,
@@ -487,23 +606,25 @@ def complete_measurements(
         how="left"
     )
 
-    # Step 2: compute the time distance of a measurement's date from the start and end dates of each record it is linked to. 
+    """
+    Step 2: compute the time distance of a measurement's date from the start and end dates of each record it is linked to. 
 
-    # These distances will be used to filter for the measurement-record pairs that are the most probable to be true. 
-    # First, we calculate how many days before the record's start, and how many days after its end a measurement was taken. 
-    # In this calculation, negative values are allowed - for example, a record taken before start is taken 'negative days' 'after' its end.
-    # After calculating the distance of a measurement from both the start and the end dates of a record, a single absolute distance from record range is calculated. 
-    # This single distance metric is set to zero if the measurement falls between the record's start and end dates; 
-    # and contains a non-zero value if it was taken some days before or after the record's validity period. 
-    # This variable is especially interesting when investigating lost data, stored in the out_range_measurements dataframe: 
-    # it shows how far from any medical record's range that measurement was taken.
-    # This metric can inform on patient behavior and data collection patterns, and most relevantly, it can guide setting the permissivity days window. 
-    # After the single absolute 'distance from record range' indicator is calculated, each measurement is flagged with a boolean variable,
-    # that tells whether the measurement is within or only near the range of the record. 
-    # If the distance is 0, the measurement is flagged as 'in range'; 
-    # if the distance is between 1 and the indicated permissivity days (most likely 10), the measurement is flagged as 'near range'.
-    # Actual links are identified if the measurement is either in or near the range of a record.
-    # If none, it will be dropped as an 'out-of-range' measurement.
+    These distances will be used to filter for the measurement-record pairs that are the most probable to be true. 
+    First, we calculate how many days before the record's start, and how many days after its end a measurement was taken. 
+    In this calculation, negative values are allowed - for example, a record taken before start is taken 'negative days' 'after' its end.
+    After calculating the distance of a measurement from both the start and the end dates of a record, a single absolute distance from record range is calculated. 
+    This single distance metric is set to zero if the measurement falls between the record's start and end dates; 
+    and contains a non-zero value if it was taken some days before or after the record's validity period. 
+    This variable is especially interesting when investigating lost data, stored in the out_range_measurements dataframe: 
+    it shows how far from any medical record's range that measurement was taken.
+    This metric can inform on patient behavior and data collection patterns, and most relevantly, it can guide setting the permissivity days window. 
+    After the single absolute 'distance from record range' indicator is calculated, each measurement is flagged with a boolean variable,
+    that tells whether the measurement is within or only near the range of the record. 
+    If the distance is 0, the measurement is flagged as 'in range'; 
+    if the distance is between 1 and the indicated permissivity days (most likely 10), the measurement is flagged as 'near range'.
+    Actual links are identified if the measurement is either in or near the range of a record.
+    If none, it will be dropped as an 'out-of-range' measurement.
+    """
 
     # First, calculate the days before start and after end dates of a record. 
     cartesian['days_before_record_start'] = (
@@ -558,18 +679,20 @@ def complete_measurements(
         )
     )
 
-    # Step 3: filter the best-matching measurement-record pairs. 
+    """
+    Step 3: filter the best-matching measurement-record pairs. 
 
-    # Within this operation, the first task is to flag the exact measurement-record pairs that are linkable, and also the measurements that have any potential links any record. 
-    # The 'measurement_record_pair_linkable' bool tells if the measurement in question is in or near the range of the record in question. 
-    # After, the 'measurement_linkable_to_any_record' bool is calculated by checking if a given measurement, identified as a patiend ID-measurement date group, 
-    # has any True values in the 'measurement_record_pair_linkable' column. If any True values are found, this is projected onto all the occurrences of that given patient ID-measurement date group. 
-    # After, we will actually filter for the best links based on the 'measurement_record_pair_linkable' variable, 
-    # sorting all the patient ID-measurement date groups by the 'measurement_distance_from_record_range' variable, keeping only the first occurrence of each group. 
-    # The creation and sorting of the 'measurement_linkable_to_any_record' variable might seem a bit redundant after creating the 'measurement_record_pair_linkable' variable, 
-    # but it is a good way of grouping together all the potential links of a measurement, and sorting through them in one place. 
-    # The 'measurement_linkable_to_any_record' variable is also used to determine out-of-range measurements: 
-    # any measurement where measurement_linkable_to_any_record is False, is considered out-of-range.
+    Within this operation, the first task is to flag the exact measurement-record pairs that are linkable, and also the measurements that have any potential links any record. 
+    The 'measurement_record_pair_linkable' bool tells if the measurement in question is in or near the range of the record in question. 
+    After, the 'measurement_linkable_to_any_record' bool is calculated by checking if a given measurement, identified as a patiend ID-measurement date group, 
+    has any True values in the 'measurement_record_pair_linkable' column. If any True values are found, this is projected onto all the occurrences of that given patient ID-measurement date group. 
+    After, we will actually filter for the best links based on the 'measurement_record_pair_linkable' variable, 
+    sorting all the patient ID-measurement date groups by the 'measurement_distance_from_record_range' variable, keeping only the first occurrence of each group. 
+    The creation and sorting of the 'measurement_linkable_to_any_record' variable might seem a bit redundant after creating the 'measurement_record_pair_linkable' variable, 
+    but it is a good way of grouping together all the potential links of a measurement, and sorting through them in one place. 
+    The 'measurement_linkable_to_any_record' variable is also used to determine out-of-range measurements: 
+    any measurement where measurement_linkable_to_any_record is False, is considered out-of-range.
+    """
 
     # Identify exact measurement-record pairs that are considered linkable
     cartesian['measurement_record_pair_linkable'] = (
@@ -596,12 +719,14 @@ def complete_measurements(
         measurement_group_keys, observed=True
     ).head(1).copy()
 
-    # Step 4: calculate the sequence of measurements within each record, the total number of measurements per record, 
-    # and the first and last measurement of each record. 
+    """
+    Step 4: calculate the sequence of measurements within each record, the total number of measurements per record, 
+    and the first and last measurement of each record. 
 
-    # These tags are important for various analytical and data processing purposes: 
-    # to be able to calculate the average number of measurements per patient as a potential adherence/engagement marker, 
-    # and to confidently identify the first measurement during baseline BMI filtering; as later, any record started with a low baseline BMI needs to be excluded. 
+    These tags are important for various analytical and data processing purposes: 
+    to be able to calculate the average number of measurements per patient as a potential adherence/engagement marker, 
+    and to confidently identify the first measurement during baseline BMI filtering; as later, any record started with a low baseline BMI needs to be excluded. 
+    """
 
     # First, sort the record ID-tagged measurements data frame by IDs and measurement date. 
     # Group by the IDs, to identify measurements from a specific record of a specific patient. 
@@ -629,12 +754,15 @@ def complete_measurements(
     measurements_complete_unfiltered.loc[first_idx, 'first_in_record'] = 1
     measurements_complete_unfiltered.loc[last_idx, 'last_in_record'] = 1
 
-    # Step 6: handle out‐of‐range measurements by linking them to the medical record they would be closest to. 
+    """
+    Step 5: handle out‐of‐range measurements by linking them to the medical record they would be closest to. 
 
-    # This is good for analytical purposes, namely, to identify any patterns in measurements taken outside of record ranges. 
-    # The out of range candidate measurements are those rows of the cartesian dataframe where measurement_linkable_to_any_record is False. 
-    # These candidate measurements are sorted by patient ID, measurement date and distance from record range, grouped by patient ID, 
-    # and in each group, the first occurrence is kept - the measurement that is closest to any record, even though it might be way out of range. 
+    This is good for analytical purposes, namely, to identify any patterns in measurements taken outside of record ranges. 
+    The out of range candidate measurements are those rows of the cartesian dataframe where measurement_linkable_to_any_record is False. 
+    These candidate measurements are sorted by patient ID, measurement date and distance from record range, grouped by patient ID, 
+    and in each group, the first occurrence is kept - the measurement that is closest to any record, even though it might be way out of range. 
+    """
+
     out_range_candidates = cartesian[~cartesian['measurement_linkable_to_any_record']].copy()
     out_range_candidates = out_range_candidates.sort_values(
         ['patient_id', 'measurement_date', 'measurement_distance_from_record_range']
@@ -643,10 +771,13 @@ def complete_measurements(
         ['patient_id', 'measurement_date'], observed=True
     ).head(1).copy()
 
-    # Step 7: finalize column order in the completed measurements data frame. 
-    # Column order is defined in config. 
-    # In case of out_range_measurements, use a slightly modified column order (defined in config) 
-    # to account for the lack of the columns only created in measurements_complete_unfiltered. 
+    """
+    Step 7: finalize column order in the completed measurements data frame. 
+    Column order is defined in config. 
+    In case of out_range_measurements, use a slightly modified column order (defined in config) 
+    to account for the lack of the columns only created in measurements_complete_unfiltered. 
+    """
+
     measurements_complete_unfiltered = measurements_complete_unfiltered[complete_column_order]
     out_range_column_order = [
         col for col in complete_column_order
@@ -655,7 +786,6 @@ def complete_measurements(
     out_range_measurements = out_range_measurements[out_range_column_order]
 
     return measurements_complete_unfiltered, out_range_measurements
-
 
 # Standardize the alleles table
 def standardize_alleles(df, column_names, column_order):
