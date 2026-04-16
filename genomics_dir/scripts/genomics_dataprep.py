@@ -367,19 +367,19 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
         cutoff_60d = record_start + pd.Timedelta(days=60)
         out['genomics_2mo_within_record_start'] = int(g_date <= cutoff_60d)
 
-    within_observation_period = (g_date >= record_start) and (g_date <= record_end)
+    within_observation_period = (g_date >= baseline_meas) and (g_date <= final_meas)
     out['genomics_within_observation_period'] = int(within_record)
-    out['genomics_before_1st_measurement'] = int(g_date < record_start)
-    out['genomics_after_last_measurement'] = int(g_date > record_end)
+    out['genomics_before_1st_measurement'] = int(g_date < baseline_meas)
+    out['genomics_after_last_measurement'] = int(g_date > final_meas)
 
-    if within_record:
-        cutoff_21d = record_start + pd.Timedelta(days=21)
+    if within_observation_period:
+        cutoff_21d = baseline_meas + pd.Timedelta(days=21)
         out['genomics_3wk_within_1st_measurement'] = int(g_date <= cutoff_21d)
         
-        cutoff_30d = record_start + pd.Timedelta(days=30)
+        cutoff_30d = baseline_meas + pd.Timedelta(days=30)
         out['genomics_1mo_within_1st_measurement'] = int(g_date <= cutoff_30d)
 
-        cutoff_60d = record_start + pd.Timedelta(days=60)
+        cutoff_60d = baseline_meas + pd.Timedelta(days=60)
         out['genomics_2mo_within_1st_measurement'] = int(g_date <= cutoff_60d)
 
     return out

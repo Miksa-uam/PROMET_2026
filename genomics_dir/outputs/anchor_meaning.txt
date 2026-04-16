@@ -1,0 +1,5 @@
+Observation period anchored means: the timing of personalization is understood within an observation period with active measurement. This is a period within a medical record in which a patient is actively stepping on the scale, is engaged with the treatment. So 'genomics 1 month within 1st measurement' here means that the patient received personalization within a month counting from the start of their observed period of engagement with the treatment. 
+
+In contrast, Medical record anchored means: the timing of personalization is understood within the administrative period of a valid, open medical record. Here, 'genomics 1 month within medical record start' holds true if genomics was received a month within the opening of the medical record - even if the patient never stepped on the scale, never engaged with the program in that time. 
+
+The choice of anchor for further analyses is an open question. On a first look, anchoring to observation period is producing smoother-looking results. 
