@@ -3,6 +3,7 @@ import os
 import sqlite3
 import unicodedata
 import numpy as np
+import warnings
 
 
 """HELPER TO NOT USE TEMP PANDAS DATA FRAMES ALL THE TIME - BUT LOAD DFS FROM SQL DBS"""
@@ -411,28 +412,6 @@ def standardize_measurements(df, column_names, column_order):
     df = df.sort_values(by=['patient_id', 'measurement_date'])
     return df
 
-# def rowclean_measurements(measurements_colclean):
-#     """Logic: 
-#     a copy of measurements colclean is called
-#     a temporary column that holds only the date part of the measurement date is created
-#     along with another one that rounds the weight to the nearest integer
-#     duplicates are dropped if the patient id, date part of measurement date, and the rounded weight are the same, keeping the last measurement
-#     warning: if there are several measurements within a day with different rounded weights, they are both kept
-#     temporary columns are dropped
-#     output is sorted by patient id and measurement date
-#     output is saved to _colclean sqlite
-#     """
-#     measurements_rowclean = measurements_colclean.copy()
-#     measurements_rowclean['measurement_date_date'] = measurements_rowclean['measurement_date'].dt.date
-#     measurements_rowclean['weight_kg_rounded'] = measurements_rowclean['weight_kg'].round(0)
-#     measurements_rowclean = measurements_rowclean.drop_duplicates(
-#         subset=['patient_id', 'measurement_date_date', 'weight_kg_rounded'],
-#         keep='last'
-#     )
-#     measurements_rowclean = measurements_rowclean.drop(columns=['measurement_date_date', 'weight_kg_rounded'])
-#     measurements_rowclean = measurements_rowclean.sort_values(by=['patient_id', 'measurement_date'])
-#     return measurements_rowclean
-
 def rowclean_measurements(
     measurements_colclean,
     first_height_lookup,               # NEW — pd.DataFrame with [patient_id, height_m]
@@ -445,18 +424,26 @@ def rowclean_measurements(
     """
     Row-level cleaning for measurements. Operates in two stages:
 
-    Stage 1 — BC quality filtering (before deduplication):
-      Joins first height per patient and recalculates BMI.
-      2a. water_% < water_floor            → all BC → NULL
-      2b. |bmi_recorded - bmi_calc| ≥ threshold → all BC → NULL
-      2c. Any BC value still ≤ 0 in a row  → all BC in that row → NULL
-      Drops rows where weight < 30 kg OR bmi_calculated < 15.
-      Drops transient height_m (re-enters later via complete_measurements).
+    Stage 1 — BC quality and weight outlier filtering (before deduplication):
+      Due to incorrect BMI entries, BIA measurement errors, or other causes, 
+      BC values might be unreliable even if weight is correct. 
+      These BC values are identified and set to NULL while keeping weight
+      and a re-calculated, correct BMI, as the code: 
+        - Joins first height per patient, recalculates BMI, calculates the difference between original and recalculated BMI.
+        - 2a. water_% < water_floor → all BC → NULL
+        - 2b. |bmi_recorded - bmi_calc| ≥ threshold → all BC → NULL
+        - 2c. Any BC value still ≤ 0 in a row  → all BC in that row → NULL
+      Irrespective of BC correctness, some entries can have implausibly low weight and BMI values. 
+      These are filtered as the script: 
+        - Drops rows where weight < 30 kg OR bmi_calculated < 15.
+      Finally, the code drops transient height_m used in BMI recalculation.
 
     Stage 2 — Deduplication:
-      Same-day, same-rounded-weight duplicates are dropped (keep last).
-      Rows with multiple measurements on the same day at different weights
-      are both retained with a warning.
+      If a patient has several measurement entries on the same day with the same rounded weight value, 
+      the one with the lowest number of NULLified BC values is kept. 
+      This is to ensure that if between duplicate entries there is a 'better', 
+      more complete one, it is prioritized over the other.  
+      If there are no differences in BC NULL count, the first entry is kept. 
     """
     if bc_vars is None:
         bc_vars = ["water_%", "muscle_%", "fat_%", "vat_%"]
@@ -464,8 +451,10 @@ def rowclean_measurements(
     df = measurements_colclean.copy()
     n_start = len(df)
 
-    # ── Row-level cleaning Stage 1: BC filtering - setting unreliable body composition entries to NULL 
-    # while keeping weight and BMI recalculated based on height (originally recorded BMI not always reliable)
+    """
+    Row-level cleaning Stage 1: BC filtering - setting unreliable body composition entries to NULL 
+    while keeping weight and BMI recalculated based on height (originally recorded BMI not always reliable)
+    """
 
     df = df.merge(first_height_lookup, on="patient_id", how="left")
     df["bmi_calculated"]    = (df["weight_kg"] / df["height_m"] ** 2).round(2)
@@ -517,15 +506,35 @@ def rowclean_measurements(
     # It re-enters via medical_records_complete in complete_measurements.
     df = df.drop(columns=["height_m"], errors="ignore")
 
-    # ── Row-level cleaning Stage 2: Deduplication - remove duplicate measurements to keep one valid measurement a day
+    """
+    Row-level cleaning Stage 2: Deduplication
+    How this works: 
+    - identify duplicate measurements as measurements taken on the same day with the same rounded weight
+    - for that, focus only on the date part of measurement datetime and the integer part of weight_kg
+    - count the number of NULL values in the BC columns and rank the duplicate entries by BC NULL count
+    - this is to ensure that if from two duplicates, only one lost BC values in the previous step, 
+      the one with no missing data is preferred
+    - if there is no difference in BC missingness, the first entry is kept
+   """
 
-    df["_date"]           = df["measurement_date"].dt.date
+    present_bc = [c for c in bc_vars if c in df.columns]
+
+    df["_date"]          = df["measurement_date"].dt.date
     df["_weight_rounded"] = df["weight_kg"].round(0)
+    df["_bc_null_count"] = df[present_bc].isna().sum(axis=1)
+
+    # Sort best row to the top of each duplicate group (fewest BC nulls first).
+    # Ties in null count are broken by original DataFrame order (stable sort).
+    df = df.sort_values(
+        by=["patient_id", "_date", "_weight_rounded", "_bc_null_count"],
+        ascending=[True, True, True, True],
+        kind="stable",
+    )
 
     n_pre_dedup = len(df)
     df = df.drop_duplicates(
         subset=["patient_id", "_date", "_weight_rounded"],
-        keep="last",
+        keep="first",
     )
 
     multi_weight = (
@@ -536,15 +545,16 @@ def rowclean_measurements(
     )
     if multi_weight > 0:
         print(f"\n  ⚠  {multi_weight:,} patient-days have >1 distinct rounded weight "
-              f"— all retained.")
+            f"— all retained.")
 
-    df = df.drop(columns=["_date", "_weight_rounded"])
+    df = df.drop(columns=["_date", "_weight_rounded", "_bc_null_count"])
     df = df.sort_values(by=["patient_id", "measurement_date"])
 
     print(f"\n  Deduplication: {n_pre_dedup:,} → {len(df):,} rows "
-          f"({n_pre_dedup - len(df):,} removed)")
+        f"({n_pre_dedup - len(df):,} removed)")
+
     print(f"\n  rowclean_measurements total: {n_start:,} → {len(df):,} rows")
-    return df
+    return df 
 
 def complete_measurements(
     measurements_rowclean,
@@ -823,7 +833,6 @@ def complete_alleles(
     Includes duplicate-safety checks and warnings before each merge.
     complete_column_order is passed in from the notebook.
     """
-    import warnings
 
     df = alleles_colclean.copy()
     patients_df = patients_colclean.copy()
@@ -886,7 +895,7 @@ def complete_alleles(
     if 'patient_id' in df.columns:
         df = df.merge(prescriptions_agg, on='patient_id', how='left')
     else:
-        warnings.warn("'patient_id' not found after first merge — skipping prescriptions merge.")
+        warnings.warn("'patient_id' column not found after merging with patients data. Skipping merge with prescriptions data.")
 
     # --- Final column order and sort ---
     cols_present = [col for col in complete_column_order if col in df.columns]
