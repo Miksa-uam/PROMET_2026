@@ -29,7 +29,8 @@ def genomics_database_subset(config: master_config) -> None:
     # Create new table names measurements_genomics and medical_records_genomics.
     table_mapping = {
         "medical_records_filtered": ("medical_records_genomics", record_ids),
-        "measurements_filtered": ("measurements_genomics", record_ids)
+        "measurements_filtered": ("measurements_genomics", record_ids),
+        "alleles_filtered": ("alleles_genomics", record_ids),
     }
 
     # Create new SQLite database connection to write filtered data.
@@ -37,7 +38,7 @@ def genomics_database_subset(config: master_config) -> None:
 
     for src_table, (dst_table, mr_ids) in table_mapping.items():
         # Prepare filtering query for tables that include 'medical_record_id'
-        if src_table in ("medical_records_filtered", "measurements_filtered"):
+        if src_table in ("medical_records_filtered", "measurements_filtered", "alleles_filtered"):
             query = f"""
                 SELECT *
                 FROM {src_table}
@@ -120,11 +121,27 @@ def load_med_records(conn, config: timetoevent_config) -> pd.DataFrame:
     date_columns = [
         "medical_record_creation_date", "medical_record_closing_date",
         "genomics_prescription_date", "genomics_purchase_date", 
-        "genomics_test_date", "genomics_results_date"
+        "genomics_sampling_date", "genomics_results_date"
     ]
     
     df = pd.read_sql(
         f"SELECT {cols_to_fetch} FROM {config.input_records}", 
+        conn,
+        parse_dates=date_columns
+    )
+    return df
+
+def load_alleles(conn, config: timetoevent_config) -> pd.DataFrame:
+    cols_to_fetch = ', '.join(config.fetch_from_alleles)
+    # We explicitly tell pandas which columns are dates so it doesn't treat them as text
+    date_columns = [
+        "genomics_lab_date", "genomics_purchase_date",
+        "genomics_sampling_date", "genomics_results_date", 
+        "gdpr10_date",
+    ]
+    
+    df = pd.read_sql(
+        f"SELECT {cols_to_fetch} FROM {config.input_alleles}", 
         conn,
         parse_dates=date_columns
     )
@@ -287,6 +304,10 @@ def calc_time_to_targets(patient_record_measurements: pd.DataFrame,
             out[f"days_to_{t}%_wl"] = np.nan
     return out
 
+
+
+    return out
+
 def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) -> dict:
     """
     Returns genomics timing flags based on record-level dates.
@@ -299,9 +320,14 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
     - before the record's validity (ie. it was available from the start, so the whole record is personalized)
     - after the record's end: the record is not personalized, but its outcomes can be interpreted in light of the patient's genotype
     - special case: some patients did a genetics test, but the results date is not available - the temporal relationship is unknown
+    
+    The above is done both for the administrative validity period of a medical record, and the observed engagement period of a patient, 
+    ie. the period between their first and last measurements within an administratively active medical record.
 
-    Days from record start to first measurement or genomics result / first measurement to genomics result: to see the time passing between these events, 
-    and identify potential windows of missing but relevant data. 
+    Other variables are calculated to identify the time passed between the opening of a record to the first measurement, 
+    the first measurement to the purchase of a genetic test, purchase to sampling, sampling to results, results to last measurement, 
+    etc, to understand the dynamics of personalization reception within each individual treatment cycle. 
+    This is used to propose and test better hypotheses regarding the effect of personalized prescription and its timing on adherence.         
     """
 
     out = {
@@ -321,66 +347,106 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
         'genomics_before_1st_measurement': np.nan,
         'genomics_after_last_measurement': np.nan,
 
+        # Existing gaps
         "record_start_to_first_measurement_d": np.nan,
         "record_start_to_genomics_results_d": np.nan,
         "first_measurement_to_genomics_results_d": np.nan,
         "last_measurement_to_record_end_d": np.nan,
+
+        # New detailed genomics pipeline gaps
+        "record_start_to_genomics_prescription_d": np.nan,
+        "genomics_prescription_to_purchase_d": np.nan,
+        "genomics_purchase_to_sampling_d": np.nan,
+        "genomics_sampling_to_lab_d": np.nan,
+        "genomics_lab_to_results_d": np.nan,
+        "genomics_sampling_to_results_d": np.nan,
+        "first_measurement_to_genomics_purchase_d": np.nan,
+        "genomics_results_to_last_measurement_d": np.nan,
     }
 
     # Get medical record, genomics, and measurement dates
-    record_start = record_info.get('medical_record_creation_date')
-    record_end = record_info.get('medical_record_closing_date')
-    g_date = record_info.get('genomics_results_date')
+    record_start = record_info.get('medical_record_creation_date') # administrative record start
+    record_end = record_info.get('medical_record_closing_date') # administrative record end
+    prescription_date = record_info.get('genomics_prescription_date') # prescription of genetic test - 99% on the day of record start
+    purchase_date = record_info.get('genomics_purchase_date') # purchase of genetic test - depends on the patient
+    sampling_date = record_info.get('genomics_sampling_date')  # taking the buccal swab - depends on both logistics and the patient
+    lab_date = record_info.get('genomics_lab_date') # lab analysis of the sample - depends on logistics and the patient (if there are delays in sending the sample)
+    results_date = record_info.get('genomics_results_date') # results available, start of personalization - 99% same as lab date
     baseline_meas = record_info.get('baseline_measurement_date') # first measurement's date
     final_meas = overall_followup_dict.get('final_measurement_date') # last measurement's date
 
-    out['no_genomics_results_date'] = int(pd.isna(g_date))
+    out['no_genomics_results_date'] = int(pd.isna(results_date))
 
+    # Existing gaps
     if pd.notna(record_start) and pd.notna(baseline_meas):
         out['record_start_to_first_measurement_d'] = (baseline_meas - record_start).days
         
-    if pd.notna(record_start) and pd.notna(g_date):
-        out['record_start_to_genomics_results_d'] = (g_date - record_start).days
+    if pd.notna(record_start) and pd.notna(results_date):
+        out['record_start_to_genomics_results_d'] = (results_date - record_start).days
         
-    if pd.notna(baseline_meas) and pd.notna(g_date):
-        out['first_measurement_to_genomics_results_d'] = (g_date - baseline_meas).days
+    if pd.notna(baseline_meas) and pd.notna(results_date):
+        out['first_measurement_to_genomics_results_d'] = (results_date - baseline_meas).days
 
     if pd.notna(final_meas) and pd.notna(record_end):
         out['last_measurement_to_record_end_d'] = (record_end - final_meas).days
 
+    if pd.notna(record_start) and pd.notna(prescription_date):
+        out['record_start_to_genomics_prescription_d'] = (prescription_date - record_start).days
+
+    if pd.notna(prescription_date) and pd.notna(purchase_date):
+        out['genomics_prescription_to_purchase_d'] = (purchase_date - prescription_date).days
+
+    if pd.notna(purchase_date) and pd.notna(sampling_date):
+        out['genomics_purchase_to_sampling_d'] = (sampling_date - purchase_date).days
+
+    if pd.notna(sampling_date) and pd.notna(lab_date):
+        out['genomics_sampling_to_lab_d'] = (lab_date - sampling_date).days
+
+    if pd.notna(lab_date) and pd.notna(results_date):
+        out['genomics_lab_to_results_d'] = (results_date - lab_date).days
+
+    if pd.notna(sampling_date) and pd.notna(results_date):
+        out['genomics_sampling_to_results_d'] = (results_date - sampling_date).days
+
+    if pd.notna(baseline_meas) and pd.notna(purchase_date):
+        out['first_measurement_to_genomics_purchase_d'] = (purchase_date - baseline_meas).days
+
+    if pd.notna(results_date) and pd.notna(final_meas):
+        out['genomics_results_to_last_measurement_d'] = (final_meas - results_date).days
+
     # If any required date is missing, return NaNs for the flags
-    if pd.isna(g_date) or pd.isna(baseline_meas) or pd.isna(final_meas):
+    if pd.isna(results_date) or pd.isna(baseline_meas) or pd.isna(final_meas):
         return out
 
-    within_record = (g_date >= record_start) and (g_date <= record_end)
+    within_record = (results_date >= record_start) and (results_date <= record_end)
     out['genomics_within_record'] = int(within_record)
-    out['genomics_before_record'] = int(g_date < record_start)
-    out['genomics_after_record'] = int(g_date > record_end)
+    out['genomics_before_record'] = int(results_date < record_start)
+    out['genomics_after_record'] = int(results_date > record_end)
 
     if within_record:
         cutoff_21d = record_start + pd.Timedelta(days=21)
-        out['genomics_3wk_within_record_start'] = int(g_date <= cutoff_21d)
+        out['genomics_3wk_within_record_start'] = int(results_date <= cutoff_21d)
         
         cutoff_30d = record_start + pd.Timedelta(days=30)
-        out['genomics_1mo_within_record_start'] = int(g_date <= cutoff_30d)
+        out['genomics_1mo_within_record_start'] = int(results_date <= cutoff_30d)
 
         cutoff_60d = record_start + pd.Timedelta(days=60)
-        out['genomics_2mo_within_record_start'] = int(g_date <= cutoff_60d)
+        out['genomics_2mo_within_record_start'] = int(results_date <= cutoff_60d)
 
-    within_observation_period = (g_date >= baseline_meas) and (g_date <= final_meas)
-    out['genomics_within_observation_period'] = int(within_record)
-    out['genomics_before_1st_measurement'] = int(g_date < baseline_meas)
-    out['genomics_after_last_measurement'] = int(g_date > final_meas)
+    within_observation_period = (results_date >= baseline_meas) and (results_date <= final_meas)
+    out['genomics_within_observation_period'] = int(within_observation_period)  # Fixed: was using within_record
+    out['genomics_before_1st_measurement'] = int(results_date < baseline_meas)
+    out['genomics_after_last_measurement'] = int(results_date > final_meas)
 
     if within_observation_period:
         cutoff_21d = baseline_meas + pd.Timedelta(days=21)
-        out['genomics_3wk_within_1st_measurement'] = int(g_date <= cutoff_21d)
+        out['genomics_3wk_within_1st_measurement'] = int(results_date <= cutoff_21d)
         
         cutoff_30d = baseline_meas + pd.Timedelta(days=30)
-        out['genomics_1mo_within_1st_measurement'] = int(g_date <= cutoff_30d)
+        out['genomics_1mo_within_1st_measurement'] = int(results_date <= cutoff_30d)
 
         cutoff_60d = baseline_meas + pd.Timedelta(days=60)
-        out['genomics_2mo_within_1st_measurement'] = int(g_date <= cutoff_60d)
+        out['genomics_2mo_within_1st_measurement'] = int(results_date <= cutoff_60d)
 
     return out
 
@@ -434,10 +500,17 @@ def build_timetoevent_table(config: master_config):
     # 2. Call refactored functions, passing the config
     all_measurements = load_measurements(conn_in, timetoevent_config)
     medical_records_data = load_med_records(conn_in, timetoevent_config)
+    alleles_data = load_alleles(conn_in, timetoevent_config)
     conn_in.close()
 
     baseline_data = extract_baseline(all_measurements)
     merged_patient_records = merge_baseline_and_records(baseline_data, medical_records_data)
+    alleles_data_agg = alleles_data.groupby('patient_id').agg({
+        'genomics_sample_id': 'first',
+        'genomics_lab_date': 'first',  # assumes same date across SNPs
+        # ... other dates
+    }).reset_index()
+    merged_patient_records = merged_patient_records.merge(alleles_data_agg, on=['patient_id'], how='left')
     merged_patient_records_indexed = merged_patient_records.set_index(["patient_id", "medical_record_id"])
 
     # Generate output column order dynamically

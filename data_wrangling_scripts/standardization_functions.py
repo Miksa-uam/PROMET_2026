@@ -339,7 +339,7 @@ def complete_medical_records(
         genomics_dates = (prescriptions_colclean[[
             'medical_record_id',
             'genomics_prescription_date', 'genomics_purchase_date',
-            'genomics_test_date', 'genomics_results_date'
+            'genomics_sampling_date', 'genomics_results_date'
         ]].drop_duplicates(subset=['medical_record_id']))
         return df.merge(genomics_dates, on='medical_record_id', how='left')
 
@@ -809,8 +809,8 @@ def standardize_alleles(df, column_names, column_order):
     df = df.copy()
     df = df.rename(columns=column_names)
 
-    if 'genomics_date' in df.columns:
-        df['genomics_date'] = pd.to_datetime(df['genomics_date'], errors='coerce')
+    if 'genomics_lab_date' in df.columns:
+        df['genomics_lab_date'] = pd.to_datetime(df['genomics_lab_date'], errors='coerce')
 
     if 'lab_name' in df.columns:
         df['lab_name'] = df['lab_name'].str.upper().replace('CG3', 'CESGEN3')
@@ -866,10 +866,10 @@ def complete_alleles(
 
     # --- Merge 2: genomics dates from prescriptions ---
     presc_cols = ['patient_id', 'genomics', 'genomics_purchase_date',
-                  'genomics_test_date', 'genomics_results_date']
+                  'genomics_sampling_date', 'genomics_results_date']
     prescriptions_merge = prescriptions_df[presc_cols].copy()
 
-    date_cols = ['genomics_purchase_date', 'genomics_test_date', 'genomics_results_date']
+    date_cols = ['genomics_purchase_date', 'genomics_sampling_date', 'genomics_results_date']
     for col in date_cols:
         prescriptions_merge[col] = pd.to_datetime(prescriptions_merge[col], errors='coerce')
 

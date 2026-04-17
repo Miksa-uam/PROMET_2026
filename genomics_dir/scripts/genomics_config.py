@@ -23,11 +23,13 @@ class filtering_config:
 class timetoevent_config:
     input_measurements: str # The input measurements used in the time-to-event type table
     input_records: str # The input medical records used in the time-to-event type table
+    input_alleles: str # The input alleles table used in the time-to-event type table
     output_table: str # The output table for the time-to-event type analysis, within the output database
     weight_loss_targets: List[int] # A configurable list of % weight loss targets - eg. 5/10% WL
     time_windows: List[int] # A configurable list of follow-up time windows - eg. 40/60 days follow-up
     window_span: int # The span of the follow-up time windows - eg. 40 +/- 10 days
     fetch_from_records: List[str] # Columns to fetch from the medical records table
+    fetch_from_alleles: List[str] # Columns to fetch from the alleles table
     clinical_data_columns: List[str] # Columns containing clinical data
     metadata_columns: List[str] # Columns containing metadata
 
