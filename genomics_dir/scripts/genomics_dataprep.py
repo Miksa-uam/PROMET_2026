@@ -506,13 +506,16 @@ def build_timetoevent_table(config: master_config):
     baseline_data = extract_baseline(all_measurements)
     merged_patient_records = merge_baseline_and_records(baseline_data, medical_records_data)
     alleles_data_agg = alleles_data.groupby('patient_id').agg({
-        'genomics_sample_id': 'first',
         'genomics_lab_date': 'first',  # assumes same date across SNPs
-        # ... other dates
     }).reset_index()
+    # Verify before merging:
+    assert alleles_data_agg["patient_id"].is_unique, \
+        "alleles_data_agg has duplicate patient_ids — agg did not collapse correctly"
+
     merged_patient_records = merged_patient_records.merge(alleles_data_agg, on=['patient_id'], how='left')
     merged_patient_records_indexed = merged_patient_records.set_index(["patient_id", "medical_record_id"])
-
+    assert merged_patient_records_indexed.index.is_unique, \
+        "Duplicate (patient_id, medical_record_id) combinations after merge — check for fan-out in alleles merge"
     # Generate output column order dynamically
     output_column_order = make_column_order(timetoevent_config)
 
@@ -536,9 +539,10 @@ def build_timetoevent_table(config: master_config):
         # 1) overall follow‐up
         overall_followup_series = calc_overall_followup(patient_group_measurements, record_info_with_baseline)
         out_dict = overall_followup_series.to_dict() # Contains baseline fields + calculated overall fields
-        # Manually add the patient_id and medical_record_id from the groupby keys
+        # Manually add the patient_id, medical_record_id and genomics sample id from the groupby keys
         out_dict["patient_id"] = patient_id
         out_dict["medical_record_id"] = medical_record_id
+        out_dict["genomics_sample_id"] = record_info_with_baseline.get("genomics_sample_id", None)
 
         # 2) fixed timepoints
         fixed_timepoints = calc_fixed_timepoints(patient_group_measurements, record_info_with_baseline, timetoevent_config)
