@@ -347,13 +347,13 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
         'genomics_before_1st_measurement': np.nan,
         'genomics_after_last_measurement': np.nan,
 
-        # Existing gaps
+        # Record administration to measurement gaps
         "record_start_to_first_measurement_d": np.nan,
         "record_start_to_genomics_results_d": np.nan,
         "first_measurement_to_genomics_results_d": np.nan,
         "last_measurement_to_record_end_d": np.nan,
 
-        # New detailed genomics pipeline gaps
+        # Detailed genomics pipeline delivery gaps
         "record_start_to_genomics_prescription_d": np.nan,
         "genomics_prescription_to_purchase_d": np.nan,
         "genomics_purchase_to_sampling_d": np.nan,
@@ -377,7 +377,7 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
 
     out['no_genomics_results_date'] = int(pd.isna(results_date))
 
-    # Existing gaps
+    # Record administration to measurement gaps
     if pd.notna(record_start) and pd.notna(baseline_meas):
         out['record_start_to_first_measurement_d'] = (baseline_meas - record_start).days
         
@@ -390,6 +390,7 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
     if pd.notna(final_meas) and pd.notna(record_end):
         out['last_measurement_to_record_end_d'] = (record_end - final_meas).days
 
+    # Detailed genomics pipeline delivery gaps
     if pd.notna(record_start) and pd.notna(prescription_date):
         out['record_start_to_genomics_prescription_d'] = (prescription_date - record_start).days
 
