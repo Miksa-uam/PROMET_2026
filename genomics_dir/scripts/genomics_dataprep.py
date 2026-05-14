@@ -304,10 +304,6 @@ def calc_time_to_targets(patient_record_measurements: pd.DataFrame,
             out[f"days_to_{t}%_wl"] = np.nan
     return out
 
-
-
-    return out
-
 def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) -> dict:
     """
     Returns genomics timing flags based on record-level dates.
