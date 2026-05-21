@@ -80,6 +80,116 @@ class descriptive_comparisons_config:
     # FDR correction setting
     fdr_correction: bool = False
 
+@dataclass
+class OmnibusTableConfig:
+    """Multi-group Kruskal-Wallis / Chi² descriptive table.
+
+    Parameters
+    ----------
+    paths           : paths_config
+    cohort_tables   : {sql_table_name: group_code}
+    row_order       : [(col_name, pretty_label), ...]  — defines rows AND columns to load
+    output_table    : name of the SQLite table written to paper_out_db
+    display         : {group_code: display_label}  — used as column headers in saved table
+    fdr_correction  : apply Benjamini-Hochberg FDR correction (default True)
+    """
+    paths:          object
+    cohort_tables:  Dict[str, str]
+    row_order:      List[Tuple[str, str]]
+    output_table:   str
+    display:        Dict[str, str]
+    fdr_correction: bool = True
+
+
+@dataclass
+class OmnibusVizConfig:
+    """Multi-group visualisation suite: alluvial, KM, and violin plots.
+
+    Column names for adherence and outcome variables are derived automatically
+    from landmark_day and wl_target — you never hard-code column names here.
+
+    Parameters
+    ----------
+    paths                   : paths_config
+    cohort_tables           : {sql_table_name: group_code}
+    group_colors            : {group_code: hex_color}
+    master_group_order      : ordered list of all possible group_codes;
+                              only those present in data are rendered
+    display                 : {group_code: display_label}
+                              Also used for auto-generated adherence / WL labels
+                              if you want to override the defaults.
+    output_dir              : folder where HTML files are written (created if absent)
+    outputs                 : {'alluvial': filename, 'km': filename, 'violin': filename}
+                              Omit a key entirely to skip that plot.
+
+    Landmark / outcome settings
+    ---------------------------
+    landmark_day            : N — used to look up Nd_dropout and Nd_wl_% columns
+    wl_target               : T — used to look up T%_wl_achieved and days_to_T%_wl
+    include_instant_dropout : if True, loads and displays instant_dropout as a
+                              separate tier on the alluvial adherence axis
+
+    KM
+    --
+    km_time_col             : follow-up time column (default 'total_followup_days')
+
+    Plot titles / subtitles
+    -----------------------
+    All optional. violin_title auto-fills from landmark_day if left blank.
+    """
+    paths:                  object
+    cohort_tables:          Dict[str, str]
+    group_colors:           Dict[str, str]
+    master_group_order:     List[str]
+    display:                Dict[str, str]
+    output_dir:             str
+    outputs:                Dict[str, str]
+
+    landmark_day:            int  = 120
+    wl_target:               int  = 10
+    include_instant_dropout: bool = True
+    km_time_col:             str  = "total_followup_days"
+
+    alluvial_title:    str = "Patient Flow: Personalization Timing, Adherence and Weight Loss"
+    km_title:          str = "Kaplan-Meier Survival Curves by Personalization Group"
+    violin_title:      str = ""   # auto-filled from landmark_day when blank
+    alluvial_subtitle: str = "\nFirst medical records only"
+    km_subtitle:       str = "\nFirst medical records only | Shaded area = 95% CI"
+    violin_subtitle:   str = "\nViolin width ∝ % reaching landmark | Box = IQR"
+
+    # ── Derived column names — read-only, computed from landmark_day / wl_target ──
+    @property
+    def dropout_col(self) -> str:
+        return f"{self.landmark_day}d_dropout"
+
+    @property
+    def wl_pct_col(self) -> str:
+        return f"{self.landmark_day}d_wl_%"
+
+    @property
+    def wl_achieved_col(self) -> str:
+        return f"{self.wl_target}%_wl_achieved"
+
+    @property
+    def days_to_wl_col(self) -> str:
+        return f"days_to_{self.wl_target}%_wl"
+
+    @property
+    def cols_alluvial(self) -> List[str]:
+        cols = [self.dropout_col, self.wl_achieved_col]
+        if self.include_instant_dropout:
+            cols.insert(0, "instant_dropout")
+        return cols
+
+    @property
+    def cols_km(self) -> List[str]:
+        return [self.km_time_col, self.wl_achieved_col, self.days_to_wl_col]
+
+    @property
+    def cols_violin(self) -> List[str]:
+        return [self.dropout_col, self.wl_pct_col]
+
+
 """
 0. MASTER CONFIG
 """
@@ -90,6 +200,8 @@ class master_config:
     Main container of config objects. 
     Some are analysis-specific, so we leave these with a default value of None, 
     that only needs to be set when the specific analysis is run.
+    Omnibus table and viz configs are instantiated independently in their own
+    notebook cells — they do not belong here.
     """
     paths: Optional[paths_config] = None
     filtering: Optional[filtering_config] = None
