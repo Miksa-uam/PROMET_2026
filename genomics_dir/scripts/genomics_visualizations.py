@@ -82,8 +82,9 @@ def make_alluvial(cfg):
     active = active_order(df, cfg.master_group_order)
     df['adherence'] = df.apply(classify_adherence, axis=1)
     df['wl_outcome'] = df.apply(classify_wl, axis=1)
-    adherence_order = ['instant_dropout', 'dropout_lt120d', 'reached_120d']
-    wl_order = ['not_achieved_wl', 'achieved_wl']
+    # Only keep categories that are actually present in the data:
+    adherence_order = [c for c in ['dropout_lt120d', 'reached_120d'] if c in df['adherence'].values] #'instant_dropout',
+    wl_order = [c for c in ['not_achieved_wl', 'achieved_wl'] if c in df['wl_outcome'].values]
     df['group'] = pd.Categorical(df['group'], categories=active, ordered=True)
     df['adherence'] = pd.Categorical(df['adherence'], categories=adherence_order, ordered=True)
     df['wl_outcome'] = pd.Categorical(df['wl_outcome'], categories=wl_order, ordered=True)
