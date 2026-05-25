@@ -636,6 +636,177 @@ def _make_km(cfg: OmnibusVizConfig):
 
 # ── Violin ────────────────────────────────────────────────────────────────────
 
+# def _make_violin(cfg: OmnibusVizConfig):
+#     df = _load_groups(cfg.paths, cfg.cohort_tables, cfg.cols_violin)
+#     active = _active_order(df, cfg.master_group_order)
+
+#     violin_title = cfg.violin_title or f"Weight Loss at {cfg.landmark_day} Days by Personalization Group"
+
+#     group_stats = {}
+#     for group_code in active:
+#         sub     = df[df["group"] == group_code]
+#         n_total = len(sub)
+#         # Eligibility: patients who reached the landmark (dropout flag == 0) AND have a valid measurement
+#         eligible = sub[sub[cfg.dropout_col] == 0][cfg.wl_pct_col].dropna()
+#         group_stats[group_code] = dict(
+#             values    = eligible.values,
+#             n_total   = n_total,
+#             n_reached = len(eligible),
+#             pct_reached = len(eligible) / n_total if n_total else 0,
+#             median = eligible.median()             if len(eligible) else np.nan,
+#             q1     = eligible.quantile(0.25)       if len(eligible) else np.nan,
+#             q3     = eligible.quantile(0.75)       if len(eligible) else np.nan,
+#         )
+
+#     # Global KW test
+#     kw_groups = [group_stats[g]["values"] for g in active if len(group_stats[g]["values"]) >= 5]
+#     kw_p = kruskal(*kw_groups).pvalue if len(kw_groups) >= 2 else np.nan
+
+#     # Pairwise MWU with FDR correction
+#     pairs = list(combinations(active, 2))
+#     raw_pvals = []
+#     for g1, g2 in pairs:
+#         v1, v2 = group_stats[g1]["values"], group_stats[g2]["values"]
+#         raw_pvals.append(
+#             mannwhitneyu(v1, v2, alternative="two-sided").pvalue
+#             if len(v1) >= 5 and len(v2) >= 5 else np.nan
+#         )
+#     valid = [p for p in raw_pvals if not np.isnan(p)]
+#     corrected = multipletests(valid, alpha=0.05, method="fdr_bh")[1] if len(valid) else []
+#     corr_iter = iter(corrected)
+#     pair_results = {}
+#     for (g1, g2), raw_p in zip(pairs, raw_pvals):
+#         if np.isnan(raw_p):
+#             pair_results[(g1, g2)] = {"sig": False, "corrected": np.nan}
+#         else:
+#             cp = next(corr_iter)
+#             pair_results[(g1, g2)] = {"sig": cp < 0.05, "corrected": cp}
+
+#     fig = go.Figure()
+#     max_pct   = max(s["pct_reached"] for s in group_stats.values()) if group_stats else 1
+#     MAX_HW    = 0.35
+
+#     for x_pos, group_code in enumerate(active):
+#         stats  = group_stats[group_code]
+#         vals   = stats["values"]
+#         color  = cfg.group_colors[group_code]
+#         label  = cfg.display[group_code]
+#         half_w = (stats["pct_reached"] / max_pct) * MAX_HW if max_pct else MAX_HW
+
+#         if len(vals) < 5:
+#             fig.add_trace(go.Scatter(
+#                 x=[x_pos], y=[stats["median"]], mode="markers",
+#                 marker=dict(color=color, size=10, symbol="diamond"),
+#                 name=label, showlegend=True,
+#             ))
+#             continue
+
+#         y_min, y_max = vals.min() - 1, vals.max() + 1
+#         y_grid  = np.linspace(y_min, y_max, 300)
+#         kde     = gaussian_kde(vals, bw_method="scott")
+#         density = kde(y_grid)
+#         density_scaled = density / density.max() * half_w
+#         x_right  = x_pos + density_scaled
+#         x_left   = x_pos - density_scaled[::-1]
+#         x_outline = np.concatenate([x_right, x_left, [x_right[0]]])
+#         y_outline = np.concatenate([y_grid,  y_grid[::-1], [y_grid[0]]])
+
+#         fig.add_trace(go.Scatter(
+#             x=x_outline, y=y_outline, fill="toself",
+#             fillcolor=_hex_to_rgba(color, 0.55),
+#             line=dict(color=color, width=1.5),
+#             name=label, legendgroup=group_code, showlegend=True, hoverinfo="skip",
+#         ))
+
+#         med = stats["median"]
+#         med_d = kde([med])[0] / density.max() * half_w
+#         fig.add_trace(go.Scatter(
+#             x=[x_pos - med_d, x_pos + med_d], y=[med, med], mode="lines",
+#             line=dict(color="white", width=3),
+#             legendgroup=group_code, showlegend=False, hoverinfo="skip",
+#         ))
+
+#         q1, q3 = stats["q1"], stats["q3"]
+#         iqr_d  = kde(np.array([q1, q3])) / density.max() * half_w
+#         box_hw = min(iqr_d) * 0.6
+#         fig.add_trace(go.Scatter(
+#             x=[x_pos-box_hw, x_pos+box_hw, x_pos+box_hw, x_pos-box_hw, x_pos-box_hw],
+#             y=[q1, q1, q3, q3, q1],
+#             fill="toself", fillcolor=_hex_to_rgba(color, 0.85),
+#             line=dict(color="white", width=1),
+#             legendgroup=group_code, showlegend=False, hoverinfo="skip",
+#         ))
+
+#         fig.add_annotation(
+#             x=x_pos, y=med,
+#             text=f"{med:.1f}%", showarrow=False,
+#             font=dict(size=11, family="Arial", color="white"),
+#         )
+#         fig.add_annotation(
+#             x=x_pos, y=y_min - 1.5,
+#             text=f"{stats['pct_reached']*100:.0f}% reached {cfg.landmark_day}d<br>n={stats['n_reached']}/{stats['n_total']}",
+#             showarrow=False,
+#             font=dict(size=11, family="Arial", color=color),
+#             yref="y",
+#         )
+
+#     all_vals = np.concatenate([s["values"] for s in group_stats.values() if len(s["values"]) > 0])
+#     y_max_data   = np.percentile(all_vals, 99) if len(all_vals) else 1
+#     bracket_step = abs(y_max_data) * 0.08 if y_max_data else 1
+#     kw_color     = "#CC0000" if (not np.isnan(kw_p) and kw_p < 0.05) else "#888888"
+
+#     fig.add_annotation(
+#         x=0.5, y=1.06, xref="paper", yref="paper",
+#         text=f"Kruskal-Wallis: {_format_p(kw_p)}", showarrow=False,
+#         font=dict(size=12, family="Arial", color=kw_color), align="center",
+#     )
+
+#     bracket_y = y_max_data + bracket_step
+#     for g1, g2 in [k for k, v in pair_results.items() if v["sig"]]:
+#         x1, x2 = active.index(g1), active.index(g2)
+#         p_str   = _format_p(pair_results[(g1, g2)]["corrected"])
+#         fig.add_shape(type="line", x0=x1, x1=x2, y0=bracket_y, y1=bracket_y,
+#                       line=dict(color="#444444", width=1.5))
+#         fig.add_shape(type="line", x0=x1, x1=x1,
+#                       y0=bracket_y - bracket_step * 0.2, y1=bracket_y,
+#                       line=dict(color="#444444", width=1.5))
+#         fig.add_shape(type="line", x0=x2, x1=x2,
+#                       y0=bracket_y - bracket_step * 0.2, y1=bracket_y,
+#                       line=dict(color="#444444", width=1.5))
+#         fig.add_annotation(
+#             x=(x1+x2)/2, y=bracket_y + bracket_step * 0.15,
+#             text=p_str, showarrow=False,
+#             font=dict(size=10, family="Arial", color="#444444"),
+#         )
+#         bracket_y += bracket_step * 1.1
+
+#     fig.update_yaxes(range=[all_vals.min() - 3, bracket_y + bracket_step] if len(all_vals) else [0, 1])
+#     fig.update_layout(
+#         title=dict(text=f"{violin_title}{cfg.violin_subtitle}", x=0.5, font=dict(size=16, family="Arial")),
+#         xaxis=dict(
+#             tickvals=list(range(len(active))),
+#             ticktext=[cfg.display[g] for g in active],
+#             tickfont=dict(size=13, family="Arial"),
+#             showgrid=False, zeroline=False,
+#         ),
+#         yaxis=dict(
+#             title=f"Weight loss at {cfg.landmark_day} days (%)",
+#             title_font=dict(size=13, family="Arial"),
+#             tickfont=dict(size=12),
+#             showgrid=True, gridcolor="rgba(200,200,200,0.4)",
+#             zeroline=True, zerolinecolor="rgba(150,150,150,0.5)", zerolinewidth=1,
+#         ),
+#         plot_bgcolor="white", paper_bgcolor="white",
+#         font=dict(family="Arial"),
+#         height=650, width=1000,
+#         showlegend=False,
+#         margin=dict(l=70, r=40, t=100, b=100),
+#     )
+#     out = Path(cfg.output_dir) / cfg.outputs["violin"]
+#     fig.write_html(str(out))
+#     print(f"  Violin saved → {out}")
+#     return fig, out
+
 def _make_violin(cfg: OmnibusVizConfig):
     df = _load_groups(cfg.paths, cfg.cohort_tables, cfg.cols_violin)
     active = _active_order(df, cfg.master_group_order)
@@ -644,25 +815,44 @@ def _make_violin(cfg: OmnibusVizConfig):
 
     group_stats = {}
     for group_code in active:
-        sub     = df[df["group"] == group_code]
+        sub = df[df["group"] == group_code]
         n_total = len(sub)
-        # Eligibility: patients who reached the landmark (dropout flag == 0) AND have a valid measurement
+
+        # Eligibility: reached landmark and has valid WL measurement
         eligible = sub[sub[cfg.dropout_col] == 0][cfg.wl_pct_col].dropna()
+
         group_stats[group_code] = dict(
-            values    = eligible.values,
-            n_total   = n_total,
-            n_reached = len(eligible),
-            pct_reached = len(eligible) / n_total if n_total else 0,
-            median = eligible.median()             if len(eligible) else np.nan,
-            q1     = eligible.quantile(0.25)       if len(eligible) else np.nan,
-            q3     = eligible.quantile(0.75)       if len(eligible) else np.nan,
+            values=eligible.values,
+            n_total=n_total,
+            n_reached=len(eligible),
+            pct_reached=len(eligible) / n_total if n_total else 0,
+            mean=eligible.mean() if len(eligible) else np.nan,
+            median=eligible.median() if len(eligible) else np.nan,
+            q1=eligible.quantile(0.25) if len(eligible) else np.nan,
+            q3=eligible.quantile(0.75) if len(eligible) else np.nan,
         )
 
-    # Global KW test
+    # Omnibus test for weight loss
     kw_groups = [group_stats[g]["values"] for g in active if len(group_stats[g]["values"]) >= 5]
-    kw_p = kruskal(*kw_groups).pvalue if len(kw_groups) >= 2 else np.nan
+    wl_p = kruskal(*kw_groups).pvalue if len(kw_groups) >= 2 else np.nan
 
-    # Pairwise MWU with FDR correction
+    # Omnibus test for adherence (% reaching landmark)
+    # rows = groups, cols = [reached, not_reached]
+    adherence_table = []
+    for g in active:
+        reached = group_stats[g]["n_reached"]
+        not_reached = group_stats[g]["n_total"] - reached
+        adherence_table.append([reached, not_reached])
+
+    adherence_table = np.array(adherence_table)
+    adh_p = np.nan
+    if adherence_table.shape[0] > 1 and adherence_table.shape[1] == 2:
+        try:
+            _, adh_p, _, _ = chi2_contingency(adherence_table)
+        except Exception:
+            adh_p = np.nan
+
+    # Pairwise MWU with FDR correction (unchanged)
     pairs = list(combinations(active, 2))
     raw_pvals = []
     for g1, g2 in pairs:
@@ -671,6 +861,7 @@ def _make_violin(cfg: OmnibusVizConfig):
             mannwhitneyu(v1, v2, alternative="two-sided").pvalue
             if len(v1) >= 5 and len(v2) >= 5 else np.nan
         )
+
     valid = [p for p in raw_pvals if not np.isnan(p)]
     corrected = multipletests(valid, alpha=0.05, method="fdr_bh")[1] if len(valid) else []
     corr_iter = iter(corrected)
@@ -683,34 +874,35 @@ def _make_violin(cfg: OmnibusVizConfig):
             pair_results[(g1, g2)] = {"sig": cp < 0.05, "corrected": cp}
 
     fig = go.Figure()
-    max_pct   = max(s["pct_reached"] for s in group_stats.values()) if group_stats else 1
-    MAX_HW    = 0.35
+    max_pct = max(s["pct_reached"] for s in group_stats.values()) if group_stats else 1
+    MAX_HW = 0.35
 
     for x_pos, group_code in enumerate(active):
-        stats  = group_stats[group_code]
-        vals   = stats["values"]
-        color  = cfg.group_colors[group_code]
-        label  = cfg.display[group_code]
+        stats = group_stats[group_code]
+        vals = stats["values"]
+        color = cfg.group_colors[group_code]
+        label = cfg.display[group_code]
         half_w = (stats["pct_reached"] / max_pct) * MAX_HW if max_pct else MAX_HW
 
         if len(vals) < 5:
             fig.add_trace(go.Scatter(
-                x=[x_pos], y=[stats["median"]], mode="markers",
+                x=[x_pos], y=[stats["mean"]], mode="markers",
                 marker=dict(color=color, size=10, symbol="diamond"),
                 name=label, showlegend=True,
             ))
             continue
 
         y_min, y_max = vals.min() - 1, vals.max() + 1
-        y_grid  = np.linspace(y_min, y_max, 300)
-        kde     = gaussian_kde(vals, bw_method="scott")
+        y_grid = np.linspace(y_min, y_max, 300)
+        kde = gaussian_kde(vals, bw_method="scott")
         density = kde(y_grid)
         density_scaled = density / density.max() * half_w
-        x_right  = x_pos + density_scaled
-        x_left   = x_pos - density_scaled[::-1]
+        x_right = x_pos + density_scaled
+        x_left = x_pos - density_scaled[::-1]
         x_outline = np.concatenate([x_right, x_left, [x_right[0]]])
-        y_outline = np.concatenate([y_grid,  y_grid[::-1], [y_grid[0]]])
+        y_outline = np.concatenate([y_grid, y_grid[::-1], [y_grid[0]]])
 
+        # Violin
         fig.add_trace(go.Scatter(
             x=x_outline, y=y_outline, fill="toself",
             fillcolor=_hex_to_rgba(color, 0.55),
@@ -718,6 +910,7 @@ def _make_violin(cfg: OmnibusVizConfig):
             name=label, legendgroup=group_code, showlegend=True, hoverinfo="skip",
         ))
 
+        # Median line kept in the background, as in original
         med = stats["median"]
         med_d = kde([med])[0] / density.max() * half_w
         fig.add_trace(go.Scatter(
@@ -726,8 +919,9 @@ def _make_violin(cfg: OmnibusVizConfig):
             legendgroup=group_code, showlegend=False, hoverinfo="skip",
         ))
 
+        # IQR box
         q1, q3 = stats["q1"], stats["q3"]
-        iqr_d  = kde(np.array([q1, q3])) / density.max() * half_w
+        iqr_d = kde(np.array([q1, q3])) / density.max() * half_w
         box_hw = min(iqr_d) * 0.6
         fig.add_trace(go.Scatter(
             x=[x_pos-box_hw, x_pos+box_hw, x_pos+box_hw, x_pos-box_hw, x_pos-box_hw],
@@ -737,11 +931,15 @@ def _make_violin(cfg: OmnibusVizConfig):
             legendgroup=group_code, showlegend=False, hoverinfo="skip",
         ))
 
+        # Mean label displayed, not median
+        mean_val = stats["mean"]
         fig.add_annotation(
-            x=x_pos, y=med,
-            text=f"{med:.1f}%", showarrow=False,
+            x=x_pos, y=mean_val,
+            text=f"{mean_val:.1f}%", showarrow=False,
             font=dict(size=11, family="Arial", color="white"),
         )
+
+        # Keep original bottom adherence labels
         fig.add_annotation(
             x=x_pos, y=y_min - 1.5,
             text=f"{stats['pct_reached']*100:.0f}% reached {cfg.landmark_day}d<br>n={stats['n_reached']}/{stats['n_total']}",
@@ -751,38 +949,61 @@ def _make_violin(cfg: OmnibusVizConfig):
         )
 
     all_vals = np.concatenate([s["values"] for s in group_stats.values() if len(s["values"]) > 0])
-    y_max_data   = np.percentile(all_vals, 99) if len(all_vals) else 1
+    y_max_data = np.percentile(all_vals, 99) if len(all_vals) else 1
     bracket_step = abs(y_max_data) * 0.08 if y_max_data else 1
-    kw_color     = "#CC0000" if (not np.isnan(kw_p) and kw_p < 0.05) else "#888888"
 
+    # Two elegant boxed omnibus p-values, same visual style as KM
     fig.add_annotation(
-        x=0.5, y=1.06, xref="paper", yref="paper",
-        text=f"Kruskal-Wallis: {_format_p(kw_p)}", showarrow=False,
-        font=dict(size=12, family="Arial", color=kw_color), align="center",
+        text=f"{cfg.landmark_day}-day weight loss: {_format_p(wl_p)}",
+        xref="paper", yref="paper", x=0.36, y=0.97,
+        xanchor="center", yanchor="top", showarrow=False,
+        font=dict(size=12, family="Arial"),
+        bgcolor="rgba(240,240,240,0.85)",
+        bordercolor="gray", borderwidth=1,
+    )
+    fig.add_annotation(
+        text=f"{cfg.landmark_day}-day adherence: {_format_p(adh_p)}",
+        xref="paper", yref="paper", x=0.64, y=0.97,
+        xanchor="center", yanchor="top", showarrow=False,
+        font=dict(size=12, family="Arial"),
+        bgcolor="rgba(240,240,240,0.85)",
+        bordercolor="gray", borderwidth=1,
     )
 
+    # Pairwise significant brackets unchanged
     bracket_y = y_max_data + bracket_step
     for g1, g2 in [k for k, v in pair_results.items() if v["sig"]]:
         x1, x2 = active.index(g1), active.index(g2)
-        p_str   = _format_p(pair_results[(g1, g2)]["corrected"])
-        fig.add_shape(type="line", x0=x1, x1=x2, y0=bracket_y, y1=bracket_y,
-                      line=dict(color="#444444", width=1.5))
-        fig.add_shape(type="line", x0=x1, x1=x1,
-                      y0=bracket_y - bracket_step * 0.2, y1=bracket_y,
-                      line=dict(color="#444444", width=1.5))
-        fig.add_shape(type="line", x0=x2, x1=x2,
-                      y0=bracket_y - bracket_step * 0.2, y1=bracket_y,
-                      line=dict(color="#444444", width=1.5))
+        p_str = _format_p(pair_results[(g1, g2)]["corrected"])
+        fig.add_shape(
+            type="line", x0=x1, x1=x2, y0=bracket_y, y1=bracket_y,
+            line=dict(color="#444444", width=1.5)
+        )
+        fig.add_shape(
+            type="line", x0=x1, x1=x1,
+            y0=bracket_y - bracket_step * 0.2, y1=bracket_y,
+            line=dict(color="#444444", width=1.5)
+        )
+        fig.add_shape(
+            type="line", x0=x2, x1=x2,
+            y0=bracket_y - bracket_step * 0.2, y1=bracket_y,
+            line=dict(color="#444444", width=1.5)
+        )
         fig.add_annotation(
-            x=(x1+x2)/2, y=bracket_y + bracket_step * 0.15,
+            x=(x1 + x2) / 2, y=bracket_y + bracket_step * 0.15,
             text=p_str, showarrow=False,
             font=dict(size=10, family="Arial", color="#444444"),
         )
         bracket_y += bracket_step * 1.1
 
     fig.update_yaxes(range=[all_vals.min() - 3, bracket_y + bracket_step] if len(all_vals) else [0, 1])
+
     fig.update_layout(
-        title=dict(text=f"{violin_title}{cfg.violin_subtitle}", x=0.5, font=dict(size=16, family="Arial")),
+        title=dict(
+            text=f"{violin_title}{cfg.violin_subtitle}",
+            x=0.5,
+            font=dict(size=16, family="Arial")
+        ),
         xaxis=dict(
             tickvals=list(range(len(active))),
             ticktext=[cfg.display[g] for g in active],
@@ -796,12 +1017,15 @@ def _make_violin(cfg: OmnibusVizConfig):
             showgrid=True, gridcolor="rgba(200,200,200,0.4)",
             zeroline=True, zerolinecolor="rgba(150,150,150,0.5)", zerolinewidth=1,
         ),
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
         font=dict(family="Arial"),
-        height=650, width=1000,
+        height=650,
+        width=1000,
         showlegend=False,
         margin=dict(l=70, r=40, t=100, b=100),
     )
+
     out = Path(cfg.output_dir) / cfg.outputs["violin"]
     fig.write_html(str(out))
     print(f"  Violin saved → {out}")
