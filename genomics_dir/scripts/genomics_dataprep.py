@@ -80,32 +80,120 @@ def genomics_database_subset(config: master_config) -> None:
 '''
 
 def make_column_order(config: timetoevent_config) -> list:
-    """Generates the final column order based on the provided configuration."""
+    """
+    Generates the final column order based on the provided configuration.
+    
+    This function acts as the "schema builder" for the final output table. 
+    It combines explicitly listed columns (metadata, clinical data) with 
+    dynamically generated columns (fixed timepoints, time-to-target flags,
+    and the new genomics event/post-personalization outcomes).
+    
+    If a column is calculated by the script but missing from this list, 
+    it will be dropped before saving the database.
+    """
 
-    # cols = config.followup_columns.copy()
-    # cols += config.predictor_columns
     cols = config.metadata_columns.copy()
     cols += config.clinical_data_columns
+
+    # 1. Standard fixed timepoint columns (anchored to baseline)
     for w in config.time_windows:
         prefix = f"{w}d"
         cols += [
-            f"{prefix}_weight_kg", f"{prefix}_wl_kg", f"{prefix}_wl_%",
+            f"{prefix}_weight_kg", 
+            f"{prefix}_wl_kg", 
+            f"{prefix}_wl_%",
+            f"{prefix}_wl_rate_kg_d",   # NEW: standard weight loss rate (kg/day)
+            f"{prefix}_wl_rate_%_d",    # NEW: standard weight loss rate (%/day)
             f"{prefix}_bmi", f"{prefix}_bmi_reduction",
             f"{prefix}_fat_%", f"{prefix}_fat_loss_%",
             f"{prefix}_muscle_%", f"{prefix}_muscle_change_%",
+            f"{prefix}_vat_%", f"{prefix}_vat_loss_%", # Added vat
             f"{prefix}_date", f"days_to_{prefix}_measurement", f"{prefix}_dropout"
         ]
+
+    # 2. Time-to-target achievement columns
     for t in config.weight_loss_targets:
         prefix = f"{t}%_wl"
         cols += [
             f"{prefix}_achieved", f"{prefix}_%", f"{prefix}_date", f"days_to_{prefix}"
         ]
+
+    # 3. Genomics timed outcomes (Snapshots at event dates)
+    for event in ["purchase", "results"]:
+        cols += [
+            f"measurement_missing_at_genomics_{event}",
+            f"measurement_date_at_genomics_{event}",
+            f"weight_kg_at_genomics_{event}",
+            f"wl_kg_at_genomics_{event}",
+            f"wl_%_at_genomics_{event}",
+            f"wl_rate_kg_d_at_genomics_{event}",
+            f"wl_rate_%_d_at_genomics_{event}",
+            f"bmi_at_genomics_{event}",
+            f"bmi_reduction_at_genomics_{event}",
+            f"fat_%_at_genomics_{event}",
+            f"fat_loss_%_at_genomics_{event}",
+            f"muscle_%_at_genomics_{event}",
+            f"muscle_change_%_at_genomics_{event}",
+            f"vat_%_at_genomics_{event}",
+            f"vat_loss_%_at_genomics_{event}",
+        ]
+    # 4. Post-personalization FINAL, overall outcomes
+    cols += [
+        "post_personalization_final_wl_kg",
+        "post_personalization_final_wl_%",
+        "post_personalization_final_wl_rate_kg_d",
+        "post_personalization_final_wl_rate_%_d",
+        "post_personalization_final_bmi_reduction",
+        "post_personalization_final_fat_loss_%",
+        "post_personalization_final_muscle_change_%",
+        "post_personalization_final_vat_loss_%",
+        # "post_personalization_final_additional_wl_kg",
+        "post_personalization_final_additional_wl_%",
+        "post_personalization_final_additional_bmi_reduction",
+        "post_personalization_final_additional_fat_loss_%",
+        "post_personalization_final_additional_muscle_change_%",
+        "post_personalization_final_additional_vat_loss_%",
+    ]
+
+    # 5. Post-personalization fixed timepoints (anchored to genomics results)
+    for w in config.time_windows:
+        prefix = f"post_personalization_{w}d"
+        cols += [
+            f"{prefix}_measurement_missing",
+            f"{prefix}_measurement_date",
+            f"days_to_{prefix}_measurement",
+            f"{prefix}_weight_kg",
+
+            # Change relative to personalization date:
+            f"{prefix}_wl_kg",
+            f"{prefix}_wl_%",
+            f"{prefix}_wl_rate_kg_d",
+            f"{prefix}_wl_rate_%_d",
+            f"{prefix}_bmi", f"{prefix}_bmi_reduction",
+            f"{prefix}_fat_%", f"{prefix}_fat_loss_%",
+            f"{prefix}_muscle_%", f"{prefix}_muscle_change_%",
+            f"{prefix}_vat_%", f"{prefix}_vat_loss_%",
+
+            # Total cumulative change at P+X relative to baseline:
+            f"{prefix}_total_wl_kg",
+            f"{prefix}_total_wl_%",
+            f"{prefix}_total_wl_rate_kg_d",
+            f"{prefix}_total_wl_rate_%_d",
+
+            # Increment/additional change accumulated AFTER personalization,
+            # expressed as the difference between total WL at P+X and total WL at P:
+            # f"{prefix}_additional_wl_kg",
+            f"{prefix}_additional_wl_%",
+            f"{prefix}_additional_wl_rate_kg_d",
+            f"{prefix}_additional_wl_rate_%_d",
+        ]
+
     return cols
 
 def load_measurements(conn, config: timetoevent_config) -> pd.DataFrame:
     # Consider selecting only necessary columns if measurements_p1 has many unused ones
     cols_to_fetch = ["patient_id", "medical_record_id", "measurement_date", 
-                      "first_in_record", "weight_kg", "bmi", "fat_%", "muscle_%"]
+                      "first_in_record", "weight_kg", "bmi", "fat_%", "muscle_%", "vat_%"]
     cols_to_fetch = [f'"{col}"' for col in cols_to_fetch]  # Ensure proper quoting for SQL, as some columns have special characters
     # Check if any other columns from measurements_p1 are implicitly used. If not, this is safer.
     # If you are sure all columns are needed, use "SELECT *"
@@ -154,12 +242,13 @@ def extract_baseline(meas: pd.DataFrame) -> pd.DataFrame:
         "weight_kg": "baseline_weight_kg",
         "bmi": "baseline_bmi",
         "fat_%": "baseline_fat_%",
-        "muscle_%": "baseline_muscle_%"
+        "muscle_%": "baseline_muscle_%",
+        "vat_%": "baseline_vat_%"
     })
     return base[[
         "patient_id", "medical_record_id",
         "baseline_measurement_date", "baseline_weight_kg", "baseline_bmi",
-        "baseline_fat_%", "baseline_muscle_%"
+        "baseline_fat_%", "baseline_muscle_%", "baseline_vat_%"
     ]]
 
 def merge_baseline_and_records(baseline, recs):
@@ -170,6 +259,8 @@ def merge_baseline_and_records(baseline, recs):
 2b. time-to-event type calculations - overall followup, outcome-at-timestamp, time-to-target data
 '''
 
+# DOCSTRING MISSING
+# when adding nadir calculations, it could probably come here
 def calc_overall_followup(patient_record_measurements: pd.DataFrame, 
                           baseline_row_info: pd.Series
                           ) -> pd.Series:
@@ -194,6 +285,8 @@ def calc_overall_followup(patient_record_measurements: pd.DataFrame,
         last["total_fat_loss_%"] = 0.0
         last["final_muscle_%"] = baseline_row_info["baseline_muscle_%"]
         last["total_muscle_change_%"] = 0.0
+        last["final_vat_%"] = baseline_row_info["baseline_vat_%"]
+        last["total_vat_loss_%"] = 0.0
     else:
         last_meas = followup_measurements.iloc[-1]
         dt = (last_meas.measurement_date - baseline_measurement_date).days + 1
@@ -208,6 +301,8 @@ def calc_overall_followup(patient_record_measurements: pd.DataFrame,
         last["total_fat_loss_%"] = last_meas["fat_%"] - baseline_row_info["baseline_fat_%"]
         last["final_muscle_%"] = last_meas["muscle_%"]
         last["total_muscle_change_%"] = last_meas["muscle_%"] - baseline_row_info["baseline_muscle_%"]
+        last["final_vat_%"] = last_meas["vat_%"]
+        last["total_vat_loss_%"] = last_meas["vat_%"] - baseline_row_info["baseline_vat_%"]
     
     last["nr_total_measurements"] = len(patient_record_measurements)
     if last["nr_total_measurements"] > 1:
@@ -218,54 +313,266 @@ def calc_overall_followup(patient_record_measurements: pd.DataFrame,
         last["avg_days_between_measurements"] = np.nan
     return last
 
-def calc_fixed_timepoints(patient_record_measurements: pd.DataFrame, 
-                          baseline_row_info: pd.Series, 
-                          config: timetoevent_config) -> dict:
+def _calc_intermediate_outcomes(take: pd.Series,
+                                   reference_date,
+                                   reference_weight_kg,
+                                   reference_bmi,
+                                   reference_fat_pct,
+                                   reference_muscle_pct,
+                                   reference_vat_pct) -> dict:
+    """    
+    
+    This is a helper function for fixed timepoint and genomics date-anchored intermediate analyses 
+    (calc_fixed_timepoints and calc_genomics_timed_outcomes), 
+    to calculate intermediate outcome values for a measurement entry, relative to a reference measurement. 
+    For example, calculate weight loss at 120 days (entry in question: weight at 120 days) 
+    relative to baseline (reference: baseline weight), 
+    or calculate weight loss 30 days after personalization (entry: weight 30 days after personalization) 
+    relative to personalization date (reference: genomics results date). 
+
+    Importantly, this function does not pick which measurement entry of a patient to use 
+    - the entry in question is identified with the next helper, _select_closest_measurement_within_window, 
+    and the reference value is set in each use case. 
+    This helper only calculates the difference between a predefined entry and its predefined reference. 
+
+    What this helper does:
+    1. Stores the selected measurement date.
+    2. Calculates elapsed days from the reference date to that measurement.
+    3. Calculates weight loss and weight-loss rates relative to the reference weight.
+    4. Calculates BMI / body-composition deltas relative to the reference values.
+
+    Sign convention:
+    Weight loss is intentionally stored as NEGATIVE in this project.
+    Therefore:
+        wl_kg = current_weight - reference_weight
+    So if current weight is lower than reference weight, wl_kg will be negative.
+
+    Missing-value handling:
+    - If weight is missing, weight-loss outputs become NaN.
+    - If BMI / fat / muscle / VAT are missing in either the reference or the selected
+      measurement, only that specific derived output becomes NaN.
+    - This allows weight outcomes to remain available even when BC values are empty.
+    """
     out = {}
+
+    # The selected measurement date itself.
+    meas_date = take["measurement_date"]
+    out["measurement_date"] = meas_date
+
+    # Elapsed time between reference and selected measurement.
+    # +1 is used consistently in this project so that same-day measurements count as day 1.
+    out["days_to_measurement"] = (
+        (meas_date - reference_date).days + 1
+        if pd.notna(reference_date) and pd.notna(meas_date)
+        else np.nan
+    )
+
+    # Raw selected weight.
+    weight_kg = take.get("weight_kg", np.nan)
+    out["weight_kg"] = weight_kg
+
+    # Weight-derived outcomes:
+    # only compute if both reference weight and selected weight are available.
+    # Also avoid division by zero if reference weight happens to be 0.
+    if pd.notna(reference_weight_kg) and reference_weight_kg != 0 and pd.notna(weight_kg):
+        wl_kg = weight_kg - reference_weight_kg
+        wl_pct = wl_kg / reference_weight_kg * 100
+
+        # The rate denominator should reflect actual elapsed days, not the nominal target day.
+        # If elapsed days are somehow missing or non-positive, fall back to 1 to avoid division by zero.
+        days_for_rate = (
+            out["days_to_measurement"]
+            if pd.notna(out["days_to_measurement"]) and out["days_to_measurement"] > 0
+            else 1
+        )
+
+        out["wl_kg"] = wl_kg
+        out["wl_%"] = wl_pct
+        out["wl_rate_kg_d"] = wl_kg / days_for_rate
+        out["wl_rate_%_d"] = wl_pct / days_for_rate
+    else:
+        out["wl_kg"] = np.nan
+        out["wl_%"] = np.nan
+        out["wl_rate_kg_d"] = np.nan
+        out["wl_rate_%_d"] = np.nan
+
+    # BMI at the selected measurement, and its change relative to the reference.
+    bmi = take.get("bmi", np.nan)
+    out["bmi"] = bmi
+    out["bmi_reduction"] = bmi - reference_bmi if pd.notna(bmi) and pd.notna(reference_bmi) else np.nan
+
+    # Fat percentage at the selected measurement, and change relative to reference.
+    fat_pct = take.get("fat_%", np.nan)
+    out["fat_%"] = fat_pct
+    out["fat_loss_%"] = fat_pct - reference_fat_pct if pd.notna(fat_pct) and pd.notna(reference_fat_pct) else np.nan
+
+    # Muscle percentage at the selected measurement, and change relative to reference.
+    muscle_pct = take.get("muscle_%", np.nan)
+    out["muscle_%"] = muscle_pct
+    out["muscle_change_%"] = (
+        muscle_pct - reference_muscle_pct
+        if pd.notna(muscle_pct) and pd.notna(reference_muscle_pct)
+        else np.nan
+    )
+
+    # VAT percentage at the selected measurement, and change relative to reference.
+    vat_pct = take.get("vat_%", np.nan)
+    out["vat_%"] = vat_pct
+    out["vat_loss_%"] = vat_pct - reference_vat_pct if pd.notna(vat_pct) and pd.notna(reference_vat_pct) else np.nan
+
+    return out
+
+def _select_closest_measurement_within_window(patient_record_measurements: pd.DataFrame,
+                                              target_date,
+                                              window_span: int):
+    """
+    This helper will select the measurement closest to a target date, within a symmetric ± window.
+    It does not calculate any outcomes, only chooses which measurement row should
+    represent that target timepoint.
+
+    Example:
+    If target_date is day 30 and window_span is 10,
+    this function looks between day 20 and day 40 inclusive.
+    Or if target is weight at genomics results (start of personalization), 
+    genomics results date is looked up and all measurements within a window of 10 days before and after
+    the genomics results date are considered.
+
+    Within a window, the measurement closest to the target date is chosen.
+
+    Why this exists:
+    Both fixed-timepoint outcomes and genomics-timed outcomes use the same rule:
+    find the observed measurement nearest to the intended timepoint.
+
+    Returns:
+    - The chosen measurement row (a pandas Series), if at least one measurement exists in the window.
+    - None, if no measurement falls inside the allowed window.
+
+    Important:
+    This function does not calculate any outcomes.
+    It only chooses WHICH measurement row should represent that target timepoint.
+    """
+    if pd.isna(target_date):
+        return None
+
+    lo = target_date - timedelta(days=window_span)
+    hi = target_date + timedelta(days=window_span)
+
+    # Restrict to measurements falling inside the allowed time window.
+    window_meas = patient_record_measurements[
+        (patient_record_measurements["measurement_date"] >= lo) &
+        (patient_record_measurements["measurement_date"] <= hi)
+    ]
+
+    if window_meas.empty:
+        return None
+
+    # Among all valid candidates, choose the one closest to the target date.
+    window_meas = window_meas.copy()
+    window_meas["dist_to_center"] = (
+        window_meas["measurement_date"] - target_date
+    ).abs().dt.days
+
+    return window_meas.loc[window_meas["dist_to_center"].idxmin()]
+
+def calc_fixed_timepoints(patient_record_measurements: pd.DataFrame,
+                          baseline_row_info: pd.Series,
+                          config: timetoevent_config) -> dict:
+    """
+    Calculate standard fixed-timepoint outcomes relative to BASELINE.
+
+    This function is for the regular time-to-event table structure:
+    for each configured follow-up window (e.g. 30d, 60d, 120d),
+    find the observed measurement closest to that target day,
+    within the allowed ± window span.
+
+    Reference (for _calc_intermediate_outcomes):
+    All outcomes here are relative to the baseline measurement.
+
+    Output naming:
+    This function preserves the project's original naming convention:
+        30d_weight_kg
+        30d_wl_kg
+        30d_wl_%
+        30d_wl_rate_kg_d
+        30d_wl_rate_%_d
+        ...
+    """
+    out = {}
+
+    # Baseline values serve as the reference for all standard fixed-timepoint outcomes.
     baseline_measurement_date = baseline_row_info["baseline_measurement_date"]
     baseline_weight_kg = baseline_row_info["baseline_weight_kg"]
     baseline_bmi = baseline_row_info["baseline_bmi"]
     baseline_fat_pct = baseline_row_info["baseline_fat_%"]
     baseline_muscle_pct = baseline_row_info["baseline_muscle_%"]
+    baseline_vat_pct = baseline_row_info["baseline_vat_%"]
 
+    # Repeat the same logic for each configured target day.
     for w in config.time_windows:
         target_date = baseline_measurement_date + timedelta(days=w)
-        lo = baseline_measurement_date + timedelta(days=w - config.window_span)
-        hi = baseline_measurement_date + timedelta(days=w + config.window_span)
-
-        window_meas = patient_record_measurements[
-            (patient_record_measurements["measurement_date"] >= lo) &
-            (patient_record_measurements["measurement_date"] <= hi)
-        ]
-        
         prefix = f"{w}d"
-        if window_meas.empty:
+
+        # Step 1:
+        # identify the closest observed measurement within the allowed ± window.
+        take = _select_closest_measurement_within_window(
+            patient_record_measurements, target_date, config.window_span
+        )
+
+        # If no measurement exists in the allowed window,
+        # this timepoint is treated as missing/dropout for this patient-record.
+        if take is None:
             out[f"{prefix}_dropout"] = 1
-            out[f"{prefix}_weight_kg"], out[f"{prefix}_wl_kg"], out[f"{prefix}_wl_%"] = np.nan, np.nan, np.nan
-            out[f"{prefix}_bmi"], out[f"{prefix}_bmi_reduction"] = np.nan, np.nan
-            out[f"{prefix}_fat_%"], out[f"{prefix}_fat_loss_%"] = np.nan, np.nan
-            out[f"{prefix}_muscle_%"], out[f"{prefix}_muscle_change_%"] = np.nan, np.nan
-            out[f"{prefix}_date"], out[f"days_to_{prefix}_measurement"] = pd.NaT, np.nan
-        else:
-            # Make a copy to safely add a column
-            window_meas_copy = window_meas.copy()
-            window_meas_copy["dist_to_center"] = (window_meas_copy["measurement_date"] - target_date).abs().dt.days
-            take = window_meas_copy.loc[window_meas_copy["dist_to_center"].idxmin()]
-            out[f"{prefix}_dropout"] = 0
-            out[f"{prefix}_weight_kg"] = take.weight_kg
-            wl_kg = take.weight_kg - baseline_weight_kg
-            out[f"{prefix}_wl_kg"] = wl_kg
-            out[f"{prefix}_wl_%"]  = 100 * wl_kg / baseline_weight_kg if baseline_weight_kg else 0
-            out[f"{prefix}_bmi"] = take.bmi
-            out[f"{prefix}_bmi_reduction"] = take.bmi - baseline_row_info["baseline_bmi"]
-            out[f"{prefix}_fat_%"] = take["fat_%"]
-            out[f"{prefix}_fat_loss_%"] = take["fat_%"] - baseline_fat_pct
-            out[f"{prefix}_muscle_%"] = take["muscle_%"]
-            out[f"{prefix}_muscle_change_%"] = take["muscle_%"] - baseline_muscle_pct
-            out[f"{prefix}_date"] = take.measurement_date
-            out[f"days_to_{prefix}_measurement"] = (take.measurement_date - baseline_measurement_date).days + 1
+            out[f"{prefix}_weight_kg"] = np.nan
+            out[f"{prefix}_wl_kg"] = np.nan
+            out[f"{prefix}_wl_%"] = np.nan
+            out[f"{prefix}_wl_rate_kg_d"] = np.nan
+            out[f"{prefix}_wl_rate_%_d"] = np.nan
+            out[f"{prefix}_bmi"] = np.nan
+            out[f"{prefix}_bmi_reduction"] = np.nan
+            out[f"{prefix}_fat_%"] = np.nan
+            out[f"{prefix}_fat_loss_%"] = np.nan
+            out[f"{prefix}_muscle_%"] = np.nan
+            out[f"{prefix}_muscle_change_%"] = np.nan
+            out[f"{prefix}_vat_%"] = np.nan
+            out[f"{prefix}_vat_loss_%"] = np.nan
+            out[f"{prefix}_date"] = pd.NaT
+            out[f"days_to_{prefix}_measurement"] = np.nan
+            continue
+
+        # Step 2:
+        # calculate outcomes for the chosen measurement relative to baseline.
+        metrics = _calc_intermediate_outcomes(
+            take=take,
+            reference_date=baseline_measurement_date,
+            reference_weight_kg=baseline_weight_kg,
+            reference_bmi=baseline_bmi,
+            reference_fat_pct=baseline_fat_pct,
+            reference_muscle_pct=baseline_muscle_pct,
+            reference_vat_pct=baseline_vat_pct,
+        )
+
+        # Step 3:
+        # write the results into the output dictionary using the established naming scheme.
+        out[f"{prefix}_dropout"] = 0
+        out[f"{prefix}_weight_kg"] = metrics["weight_kg"]
+        out[f"{prefix}_wl_kg"] = metrics["wl_kg"]
+        out[f"{prefix}_wl_%"] = metrics["wl_%"]
+        out[f"{prefix}_wl_rate_kg_d"] = metrics["wl_rate_kg_d"]
+        out[f"{prefix}_wl_rate_%_d"] = metrics["wl_rate_%_d"]
+        out[f"{prefix}_bmi"] = metrics["bmi"]
+        out[f"{prefix}_bmi_reduction"] = metrics["bmi_reduction"]
+        out[f"{prefix}_fat_%"] = metrics["fat_%"]
+        out[f"{prefix}_fat_loss_%"] = metrics["fat_loss_%"]
+        out[f"{prefix}_muscle_%"] = metrics["muscle_%"]
+        out[f"{prefix}_muscle_change_%"] = metrics["muscle_change_%"]
+        out[f"{prefix}_vat_%"] = metrics["vat_%"]
+        out[f"{prefix}_vat_loss_%"] = metrics["vat_loss_%"]
+        out[f"{prefix}_date"] = metrics["measurement_date"]
+        out[f"days_to_{prefix}_measurement"] = metrics["days_to_measurement"]
+
     return out
 
+# DOCSTRING MISSING 
 def calc_time_to_targets(patient_record_measurements: pd.DataFrame, 
                          baseline_row_info: pd.Series, 
                          config: timetoevent_config) -> dict:
@@ -447,6 +754,359 @@ def calc_genomics_timing(record_info: pd.Series, overall_followup_dict: dict) ->
 
     return out
 
+def calc_genomics_timed_outcomes(patient_record_measurements: pd.DataFrame,
+                                 baseline_row_info: pd.Series,
+                                 config: timetoevent_config) -> dict:
+    """
+    Calculate intermediate outcomes relative to the timing of personalization, in two parts.
+
+    PART 1 — Event snapshots
+    ------------------------
+    Find the measurement closest to each genomics event date:
+    - genomics purchase (this is when the patient orders the genetic test, opting in for personalization)
+    - genomics results (this is the start of personalization)
+
+    These outputs describe the patient's observed weight around those event dates.
+
+    PART 2 — Post-personalization fixed timepoints
+    ----------------------------------------------
+    If genomics results are available, treat the results date as the start of personalization,
+    then calculate outcomes at fixed windows AFTER that date:
+        post_personalization_30d_wl_kg
+        post_personalization_60d_*
+        etc.
+
+    Key missing-data rule:
+    - If an event date itself is missing, related outputs are left NULL.
+    - If the event exists but no measurement is found inside the allowed ± window,
+      then measurement_missing = 1 for that event/timepoint.
+
+    This distinction matters:
+    "event not observed" is not the same thing as
+    "event observed, but no nearby measurement available."
+    """
+    out = {}
+
+    # Baseline values are needed because:
+    # 1) event snapshots are interpreted relative to baseline
+    # 2) post-personalization "additional" outcomes are also baseline-referenced
+    baseline_measurement_date = baseline_row_info.get("baseline_measurement_date")
+    baseline_weight_kg = baseline_row_info.get("baseline_weight_kg")
+    baseline_bmi = baseline_row_info.get("baseline_bmi")
+    baseline_fat_pct = baseline_row_info.get("baseline_fat_%")
+    baseline_muscle_pct = baseline_row_info.get("baseline_muscle_%")
+    baseline_vat_pct = baseline_row_info.get("baseline_vat_%")
+
+    # Without patient measurements or a baseline date, none of these calculations are meaningful.
+    if patient_record_measurements.empty or pd.isna(baseline_measurement_date):
+        return out
+
+    # The two genomics events of interest.
+    event_dates = {
+        "purchase": baseline_row_info.get("genomics_purchase_date"),
+        "results": baseline_row_info.get("genomics_results_date"),
+    }
+
+    # We store the full metric set for each event here,
+    # because the "results" snapshot later becomes the anchor for post-personalization analyses.
+    event_metrics = {}
+
+    # ------------------------------------------------------------------
+    # PART 1: outcomes at genomics purchase / genomics results
+    # ------------------------------------------------------------------
+    for event_name, event_date in event_dates.items():
+        # If the event date itself is missing, leave all related outputs NULL.
+        # We intentionally do NOT set measurement_missing = 1 here,
+        # because this is not a measurement-window problem; the event itself is unknown.
+        if pd.isna(event_date):
+            continue
+
+        # Find the observed measurement closest to the event date, within ± config.window_span days.
+        take = _select_closest_measurement_within_window(
+            patient_record_measurements, event_date, config.window_span
+        )
+
+        # Here measurement_missing means:
+        # the event exists, but there is no measurement close enough to represent it.
+        out[f"measurement_missing_at_genomics_{event_name}"] = 1 if take is None else 0
+
+        if take is None:
+            continue
+
+        # Calculate event-linked outcomes relative to baseline.
+        # This tells us the patient's state around the purchase/results event.
+        metrics = _calc_intermediate_outcomes(
+            take=take,
+            reference_date=baseline_measurement_date,
+            reference_weight_kg=baseline_weight_kg,
+            reference_bmi=baseline_bmi,
+            reference_fat_pct=baseline_fat_pct,
+            reference_muscle_pct=baseline_muscle_pct,
+            reference_vat_pct=baseline_vat_pct,
+        )
+        event_metrics[event_name] = metrics
+
+        # Save the raw measurement date and values around the event.
+        out[f"measurement_date_at_genomics_{event_name}"] = metrics["measurement_date"]
+        out[f"weight_kg_at_genomics_{event_name}"] = metrics["weight_kg"]
+
+        # Save weight-loss outcomes around the event.
+        out[f"wl_kg_at_genomics_{event_name}"] = metrics["wl_kg"]
+        out[f"wl_%_at_genomics_{event_name}"] = metrics["wl_%"]
+        out[f"wl_rate_kg_d_at_genomics_{event_name}"] = metrics["wl_rate_kg_d"]
+        out[f"wl_rate_%_d_at_genomics_{event_name}"] = metrics["wl_rate_%_d"]
+
+        # Save BMI and body-composition values around the event.
+        out[f"bmi_at_genomics_{event_name}"] = metrics["bmi"]
+        out[f"bmi_reduction_at_genomics_{event_name}"] = metrics["bmi_reduction"]
+
+        out[f"fat_%_at_genomics_{event_name}"] = metrics["fat_%"]
+        out[f"fat_loss_%_at_genomics_{event_name}"] = metrics["fat_loss_%"]
+
+        out[f"muscle_%_at_genomics_{event_name}"] = metrics["muscle_%"]
+        out[f"muscle_change_%_at_genomics_{event_name}"] = metrics["muscle_change_%"]
+
+        out[f"vat_%_at_genomics_{event_name}"] = metrics["vat_%"]
+        out[f"vat_loss_%_at_genomics_{event_name}"] = metrics["vat_loss_%"]
+
+    # ------------------------------------------------------------------
+    # PART 2: post-personalization fixed timepoints relative to the start 
+    # of personalization (reception of genomics results)
+    # ------------------------------------------------------------------
+
+    # Personalization is defined as starting at the reception of genomics results.
+    results_date = event_dates["results"]
+
+    # If results date is missing, post-personalization outcomes cannot be defined.
+    if pd.isna(results_date):
+        return out
+
+    # To compute post-personalization change, we also need a usable "state at results".
+    # That means we need an actual measurement near the results date.
+    results_metrics = event_metrics.get("results")
+    if results_metrics is None or pd.isna(results_metrics.get("weight_kg", np.nan)):
+        return out
+
+    # These "results_*" values become the reference for post-personalization outcomes.
+    results_weight_kg = results_metrics["weight_kg"]
+    results_bmi = results_metrics["bmi"]
+    results_fat_pct = results_metrics["fat_%"]
+    results_muscle_pct = results_metrics["muscle_%"]
+    results_vat_pct = results_metrics["vat_%"]
+
+    # Repeat the same fixed-window logic, but now the reference is genomics results date,
+    # not baseline.
+    for w in config.time_windows:
+        prefix = f"post_personalization_{w}d"
+        target_date = results_date + timedelta(days=w)
+
+        take = _select_closest_measurement_within_window(
+            patient_record_measurements, target_date, config.window_span
+        )
+
+        if take is None:
+            out[f"{prefix}_measurement_missing"] = 1
+            continue
+
+        out[f"{prefix}_measurement_missing"] = 0
+
+        # 1) Post-personalization metrics:
+        # change from personalization date to P+X.
+        post_metrics = _calc_intermediate_outcomes(
+            take=take,
+            reference_date=results_date,
+            reference_weight_kg=results_weight_kg,
+            reference_bmi=results_bmi,
+            reference_fat_pct=results_fat_pct,
+            reference_muscle_pct=results_muscle_pct,
+            reference_vat_pct=results_vat_pct,
+        )
+
+        # 2) Total cumulative metrics at P+X:
+        # change from baseline to the same later measurement.
+        total_metrics = _calc_intermediate_outcomes(
+            take=take,
+            reference_date=baseline_measurement_date,
+            reference_weight_kg=baseline_weight_kg,
+            reference_bmi=baseline_bmi,
+            reference_fat_pct=baseline_fat_pct,
+            reference_muscle_pct=baseline_muscle_pct,
+            reference_vat_pct=baseline_vat_pct,
+        )
+
+        # 3) Additional/incremental metrics:
+        # difference between total WL at P+X and total WL at personalization,
+        # both expressed relative to baseline.
+        additional_wl_kg = np.nan
+        additional_wl_pct = np.nan
+        additional_wl_rate_kg_d = np.nan
+        additional_wl_rate_pct_d = np.nan
+
+        total_wl_at_personalization_kg = results_metrics.get("wl_kg", np.nan)
+        total_wl_at_personalization_pct = results_metrics.get("wl_%", np.nan)
+
+        if pd.notna(total_metrics.get("wl_kg", np.nan)) and pd.notna(total_wl_at_personalization_kg):
+            additional_wl_kg = total_metrics["wl_kg"] - total_wl_at_personalization_kg
+
+        if pd.notna(total_metrics.get("wl_%", np.nan)) and pd.notna(total_wl_at_personalization_pct):
+            additional_wl_pct = total_metrics["wl_%"] - total_wl_at_personalization_pct
+
+        days_after_personalization = post_metrics.get("days_to_measurement", np.nan)
+        if pd.notna(days_after_personalization) and days_after_personalization > 0:
+            if pd.notna(additional_wl_kg):
+                additional_wl_rate_kg_d = additional_wl_kg / days_after_personalization
+            if pd.notna(additional_wl_pct):
+                additional_wl_rate_pct_d = additional_wl_pct / days_after_personalization
+
+        # Save post-personalization outcomes relative to genomics results.
+        out[f"{prefix}_measurement_date"] = post_metrics["measurement_date"]
+        out[f"{prefix}_weight_kg"] = post_metrics["weight_kg"]
+        out[f"{prefix}_wl_kg"] = post_metrics["wl_kg"]
+        out[f"{prefix}_wl_%"] = post_metrics["wl_%"]
+        out[f"{prefix}_wl_rate_kg_d"] = post_metrics["wl_rate_kg_d"]
+        out[f"{prefix}_wl_rate_%_d"] = post_metrics["wl_rate_%_d"]
+        out[f"{prefix}_bmi"] = post_metrics["bmi"]
+        out[f"{prefix}_bmi_reduction"] = post_metrics["bmi_reduction"]
+        out[f"{prefix}_fat_%"] = post_metrics["fat_%"]
+        out[f"{prefix}_fat_loss_%"] = post_metrics["fat_loss_%"]
+        out[f"{prefix}_muscle_%"] = post_metrics["muscle_%"]
+        out[f"{prefix}_muscle_change_%"] = post_metrics["muscle_change_%"]
+        out[f"{prefix}_vat_%"] = post_metrics["vat_%"]
+        out[f"{prefix}_vat_loss_%"] = post_metrics["vat_loss_%"]
+        out[f"days_to_{prefix}_measurement"] = post_metrics["days_to_measurement"]
+
+        # Save total cumulative outcomes at P+X relative to baseline.
+        out[f"{prefix}_total_wl_kg"] = total_metrics["wl_kg"]
+        out[f"{prefix}_total_wl_%"] = total_metrics["wl_%"]
+        out[f"{prefix}_total_wl_rate_kg_d"] = total_metrics["wl_rate_kg_d"]
+        out[f"{prefix}_total_wl_rate_%_d"] = total_metrics["wl_rate_%_d"]
+
+        # Save additional/incremental outcomes accumulated after personalization,
+        # but still expressed relative to baseline-loss space.
+        out[f"{prefix}_additional_wl_kg"] = additional_wl_kg
+        out[f"{prefix}_additional_wl_%"] = additional_wl_pct
+        out[f"{prefix}_additional_wl_rate_kg_d"] = additional_wl_rate_kg_d
+        out[f"{prefix}_additional_wl_rate_%_d"] = additional_wl_rate_pct_d
+
+    return out
+
+def calc_post_personalization_final_outcomes(out_dict: dict) -> dict:
+    """
+    Derive post-personalization final endpoint outcomes from already computed values.
+    These are derived from the weight at personalization and the last overall weight measured. 
+
+    Uses:
+    - overall follow-up final values / total cumulative changes
+    - outcomes at genomics results (start of personalization)
+    - time from genomics results to final measurement
+
+    Returns only derived endpoint variables for the period from personalization
+    to the last observed measurement.
+    """
+    out = {}
+
+    days = out_dict.get("genomics_results_to_last_measurement_d", np.nan)
+
+    final_weight = out_dict.get("final_weight_kg", np.nan)
+    weight_at_personalization = out_dict.get("weight_kg_at_genomics_results", np.nan)
+
+    total_wl_kg = out_dict.get("total_wl_kg", np.nan)
+    wl_kg_at_personalization = out_dict.get("wl_kg_at_genomics_results", np.nan)
+
+    total_wl_pct = out_dict.get("total_wl_%", np.nan)
+    wl_pct_at_personalization = out_dict.get("wl_%_at_genomics_results", np.nan)
+
+    final_bmi = out_dict.get("final_bmi", np.nan)
+    bmi_at_personalization = out_dict.get("bmi_at_genomics_results", np.nan)
+    total_bmi_reduction = out_dict.get("bmi_reduction", np.nan)
+    bmi_reduction_at_personalization = out_dict.get("bmi_reduction_at_genomics_results", np.nan)
+
+    final_fat = out_dict.get("final_fat_%", np.nan)
+    fat_at_personalization = out_dict.get("fat_%_at_genomics_results", np.nan)
+    total_fat_loss = out_dict.get("total_fat_loss_%", np.nan)
+    fat_loss_at_personalization = out_dict.get("fat_loss_%_at_genomics_results", np.nan)
+
+    final_muscle = out_dict.get("final_muscle_%", np.nan)
+    muscle_at_personalization = out_dict.get("muscle_%_at_genomics_results", np.nan)
+    total_muscle_change = out_dict.get("total_muscle_change_%", np.nan)
+    muscle_change_at_personalization = out_dict.get("muscle_change_%_at_genomics_results", np.nan)
+
+    final_vat = out_dict.get("final_vat_%", np.nan)
+    vat_at_personalization = out_dict.get("vat_%_at_genomics_results", np.nan)
+    total_vat_loss = out_dict.get("total_vat_loss_%", np.nan)
+    vat_loss_at_personalization = out_dict.get("vat_loss_%_at_genomics_results", np.nan)
+
+    if pd.isna(days) or days <= 0:
+        return out
+    if pd.isna(final_weight) or pd.isna(weight_at_personalization):
+        return out
+
+    # Post-personalization final change
+    out["post_personalization_final_wl_kg"] = final_weight - weight_at_personalization
+    out["post_personalization_final_wl_%"] = (
+        100 * out["post_personalization_final_wl_kg"] / weight_at_personalization
+        if pd.notna(weight_at_personalization) and weight_at_personalization != 0
+        else np.nan
+    )
+    out["post_personalization_final_wl_rate_kg_d"] = out["post_personalization_final_wl_kg"] / days
+    out["post_personalization_final_wl_rate_%_d"] = out["post_personalization_final_wl_%"] / days
+
+    out["post_personalization_final_bmi_reduction"] = (
+        final_bmi - bmi_at_personalization
+        if pd.notna(final_bmi) and pd.notna(bmi_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_fat_loss_%"] = (
+        final_fat - fat_at_personalization
+        if pd.notna(final_fat) and pd.notna(fat_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_muscle_change_%"] = (
+        final_muscle - muscle_at_personalization
+        if pd.notna(final_muscle) and pd.notna(muscle_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_vat_loss_%"] = (
+        final_vat - vat_at_personalization
+        if pd.notna(final_vat) and pd.notna(vat_at_personalization)
+        else np.nan
+    )
+
+    # Additional post-personalization change in baseline-referenced space: 
+    # additional weight lost relative to what was already lost by the start of personalization
+    out["post_personalization_final_additional_wl_kg"] = (
+        total_wl_kg - wl_kg_at_personalization
+        if pd.notna(total_wl_kg) and pd.notna(wl_kg_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_additional_wl_%"] = (
+        total_wl_pct - wl_pct_at_personalization
+        if pd.notna(total_wl_pct) and pd.notna(wl_pct_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_additional_bmi_reduction"] = (
+        total_bmi_reduction - bmi_reduction_at_personalization
+        if pd.notna(total_bmi_reduction) and pd.notna(bmi_reduction_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_additional_fat_loss_%"] = (
+        total_fat_loss - fat_loss_at_personalization
+        if pd.notna(total_fat_loss) and pd.notna(fat_loss_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_additional_muscle_change_%"] = (
+        total_muscle_change - muscle_change_at_personalization
+        if pd.notna(total_muscle_change) and pd.notna(muscle_change_at_personalization)
+        else np.nan
+    )
+    out["post_personalization_final_additional_vat_loss_%"] = (
+        total_vat_loss - vat_loss_at_personalization
+        if pd.notna(total_vat_loss) and pd.notna(vat_loss_at_personalization)
+        else np.nan
+    )
+
+    return out
+
 def process_country_dummies(df: pd.DataFrame, output_column_order: list) -> tuple[pd.DataFrame, list, list]:
     """
     Processes country column to create dummy variables and updates the output_column_order.
@@ -553,6 +1213,25 @@ def build_timetoevent_table(config: master_config):
 
         genomics_timing_dict = calc_genomics_timing(record_info_with_baseline, out_dict)
         out_dict.update(genomics_timing_dict)
+
+        # 5) genomics-timed outcomes
+        # These are outcome variables linked directly to:
+        # - genomics purchase date
+        # - genomics results date
+        # - fixed post-personalization windows after genomics results
+        #
+        # This is separate from calc_genomics_timing(), which creates timing flags
+        # and interval variables describing where genomics falls inside the record.
+        genomics_timed_outcomes = calc_genomics_timed_outcomes(
+            patient_group_measurements,
+            record_info_with_baseline,
+            timetoevent_config
+        )
+        out_dict.update(genomics_timed_outcomes)
+
+        # 6) post-personalization final outcomes
+        post_personalization_final_dict = calc_post_personalization_final_outcomes(out_dict)
+        out_dict.update(post_personalization_final_dict)
 
         output_rows.append(out_dict)
 
