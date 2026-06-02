@@ -1,8 +1,13 @@
+# Database files
 *.sqlite
 *.db
 *.bundle
-*.ipynb_checkpoints/
-__pycache__/
-# OS noise
+# Virtual environments
+.venv/
+venv/
+# OS and Python noise
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
+*.ipynb_checkpoints/
