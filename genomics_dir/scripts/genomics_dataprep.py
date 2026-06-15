@@ -1282,16 +1282,36 @@ def subset_timetoevent_table(config: master_config) -> None:
                 cols_to_check_absence = []
                 value_filters = []
                 
+                # for cond in conditions:
+                #     if isinstance(cond, str):
+                #         cols_to_check_existence.append(cond)
+                #     elif isinstance(cond, (list, tuple)) and len(cond) == 2:
+                #         if cond[1] == "IS_NULL":
+                #             cols_to_check_absence.append(cond[0])
+                #         else:
+                #             value_filters.append(cond)
+                #     else:
+                #         print(f" - Warning: Invalid condition format '{cond}' for table '{output_table}'. Skipping.")
+
+                                # Add a new list to collect custom operator filters
+                operator_filters = []
+                
                 for cond in conditions:
                     if isinstance(cond, str):
                         cols_to_check_existence.append(cond)
-                    elif isinstance(cond, (list, tuple)) and len(cond) == 2:
-                        if cond[1] == "IS_NULL":
-                            cols_to_check_absence.append(cond[0])
+                    elif isinstance(cond, (list, tuple)):
+                        if len(cond) == 2:
+                            if cond[1] == "IS_NULL":
+                                cols_to_check_absence.append(cond[0])
+                            else:
+                                value_filters.append(cond)
+                        elif len(cond) == 3:
+                            # New format: ("column", "operator", value)
+                            operator_filters.append(cond)
                         else:
-                            value_filters.append(cond)
+                            print(f"      - Warning: Invalid condition format {cond} for table {output_table}. Skipping.")
                     else:
-                        print(f" - Warning: Invalid condition format '{cond}' for table '{output_table}'. Skipping.")
+                        print(f"      - Warning: Invalid condition format {cond} for table {output_table}. Skipping.")
                 
                 # Check if all required columns exist in the DataFrame
                 required_cols = cols_to_check_existence + cols_to_check_absence + [c for c, _ in value_filters]
@@ -1301,9 +1321,24 @@ def subset_timetoevent_table(config: master_config) -> None:
                     print(f" - Warning: Skipping table '{output_table}' because columns {missing_cols} were not found.")
                     continue
 
+                # # Apply Filtering
+                # subset_df = source_df.copy()
+
+                # # 1. Existence Check (Not Null)
+                # if cols_to_check_existence:
+                #     subset_df = subset_df.dropna(subset=cols_to_check_existence)
+                    
+                # # 2. Absence Check (Is Null)
+                # for col in cols_to_check_absence:
+                #     subset_df = subset_df[subset_df[col].isna()]
+
+                # # 3. Value Check (Equality)
+                # for col, val in value_filters:
+                #     subset_df = subset_df[subset_df[col] == val]
+
                 # Apply Filtering
                 subset_df = source_df.copy()
-
+                
                 # 1. Existence Check (Not Null)
                 if cols_to_check_existence:
                     subset_df = subset_df.dropna(subset=cols_to_check_existence)
@@ -1311,10 +1346,39 @@ def subset_timetoevent_table(config: master_config) -> None:
                 # 2. Absence Check (Is Null)
                 for col in cols_to_check_absence:
                     subset_df = subset_df[subset_df[col].isna()]
-
-                # 3. Value Check (Equality)
+                    
+                # 3. Value Filters
                 for col, val in value_filters:
                     subset_df = subset_df[subset_df[col] == val]
+
+                # 4. Operator Filters (e.g. >= dates)
+                for col, op, val in operator_filters:
+                    if col not in subset_df.columns:
+                        print(f"      - Warning: Column {col} missing for operator filter. Skipping filter.")
+                        continue
+                        
+                    # If the value looks like a date string and the column isn't datetime, ensure it is converted
+                    # For robustness, we let pandas compare strings directly if they are ISO format, 
+                    # but converting to datetime guarantees correct comparison.
+                    if isinstance(val, str) and "-" in val and op in [">=", "<=", ">", "<"]:
+                        col_data = pd.to_datetime(subset_df[col], errors='coerce')
+                        val_data = pd.to_datetime(val)
+                    else:
+                        col_data = subset_df[col]
+                        val_data = val
+
+                    if op == ">=":
+                        subset_df = subset_df[col_data >= val_data]
+                    elif op == "<=":
+                        subset_df = subset_df[col_data <= val_data]
+                    elif op == ">":
+                        subset_df = subset_df[col_data > val_data]
+                    elif op == "<":
+                        subset_df = subset_df[col_data < val_data]
+                    elif op == "!=":
+                        subset_df = subset_df[col_data != val_data]
+                    else:
+                        print(f"      - Warning: Unsupported operator '{op}'. Skipping filter.")
 
                 # Save result
                 subset_df.to_sql(output_table, conn, if_exists="replace", index=False)
