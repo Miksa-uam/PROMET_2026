@@ -797,119 +797,119 @@ def complete_measurements(
 
     return measurements_complete_unfiltered, out_range_measurements
 
-# Standardize the alleles table
-def standardize_alleles(df, column_names, column_order):
-    """
-    Renames columns, enforces datetime, standardises lab names,
-    reorders and sorts. No value translation needed for this table.
-    column_order is passed in from the notebook.
-    Note: lab name standardisation (CG3 → CESGEN3) is a hardcoded
-    data-quality rule, not user config — it lives in the function intentionally.
-    """
-    df = df.copy()
-    df = df.rename(columns=column_names)
+# # Standardize the alleles table
+# def standardize_alleles(df, column_names, column_order):
+#     """
+#     Renames columns, enforces datetime, standardises lab names,
+#     reorders and sorts. No value translation needed for this table.
+#     column_order is passed in from the notebook.
+#     Note: lab name standardisation (CG3 → CESGEN3) is a hardcoded
+#     data-quality rule, not user config — it lives in the function intentionally.
+#     """
+#     df = df.copy()
+#     df = df.rename(columns=column_names)
 
-    if 'genomics_lab_date' in df.columns:
-        df['genomics_lab_date'] = pd.to_datetime(df['genomics_lab_date'], errors='coerce')
+#     if 'genomics_lab_date' in df.columns:
+#         df['genomics_lab_date'] = pd.to_datetime(df['genomics_lab_date'], errors='coerce')
 
-    if 'lab_name' in df.columns:
-        df['lab_name'] = df['lab_name'].str.upper().replace('CG3', 'CESGEN3')
+#     if 'lab_name' in df.columns:
+#         df['lab_name'] = df['lab_name'].str.upper().replace('CG3', 'CESGEN3')
 
-    cols_present = [col for col in column_order if col in df.columns]
-    df = df[cols_present]
+#     cols_present = [col for col in column_order if col in df.columns]
+#     df = df[cols_present]
 
-    if 'genomics_sample_id' in df.columns:
-        df = df.sort_values(by='genomics_sample_id')
-    return df
+#     if 'genomics_sample_id' in df.columns:
+#         df = df.sort_values(by='genomics_sample_id')
+#     return df
 
-def complete_alleles(
-    alleles_colclean,
-    patients_colclean,
-    prescriptions_colclean,
-    complete_column_order):
-    """
-    Enriches alleles_colclean with patient_id, GDPR10 data (from patients_colclean)
-    and genomics-related dates (from prescriptions_colclean).
-    Includes duplicate-safety checks and warnings before each merge.
-    complete_column_order is passed in from the notebook.
-    """
+# def complete_alleles(
+#     alleles_colclean,
+#     patients_colclean,
+#     prescriptions_colclean,
+#     complete_column_order):
+#     """
+#     Enriches alleles_colclean with patient_id, GDPR10 data (from patients_colclean)
+#     and genomics-related dates (from prescriptions_colclean).
+#     Includes duplicate-safety checks and warnings before each merge.
+#     complete_column_order is passed in from the notebook.
+#     """
 
-    df = alleles_colclean.copy()
-    patients_df = patients_colclean.copy()
-    prescriptions_df = prescriptions_colclean.copy()
+#     df = alleles_colclean.copy()
+#     patients_df = patients_colclean.copy()
+#     prescriptions_df = prescriptions_colclean.copy()
 
-    # --- Merge 1: patient_id + GDPR10 from patients ---
-    patient_cols = ['patient_id', 'genomics_sample_id', 'gdpr10', 'gdpr10_date']
-    patients_merge = patients_df[patient_cols].copy()
+#     # --- Merge 1: patient_id + GDPR10 from patients ---
+#     patient_cols = ['patient_id', 'genomics_sample_id', 'gdpr10', 'gdpr10_date']
+#     patients_merge = patients_df[patient_cols].copy()
 
-    initial_rows = len(patients_merge)
-    patients_merge = patients_merge.drop_duplicates(subset=patient_cols, keep='first')
-    dropped = initial_rows - len(patients_merge)
-    if dropped > 0:
-        print(f"  Dropped {dropped} fully duplicated rows from patients merge data.")
+#     initial_rows = len(patients_merge)
+#     patients_merge = patients_merge.drop_duplicates(subset=patient_cols, keep='first')
+#     dropped = initial_rows - len(patients_merge)
+#     if dropped > 0:
+#         print(f"  Dropped {dropped} fully duplicated rows from patients merge data.")
 
-    key_dups = patients_merge[patients_merge.duplicated(subset=['genomics_sample_id'], keep=False)]
-    if not key_dups.empty:
-        print(f"  Warning: {len(key_dups)} rows with duplicated 'genomics_sample_id' after dedup — keeping first.")
-        patients_merge = patients_merge.drop_duplicates(subset=['genomics_sample_id'], keep='first')
+#     key_dups = patients_merge[patients_merge.duplicated(subset=['genomics_sample_id'], keep=False)]
+#     if not key_dups.empty:
+#         print(f"  Warning: {len(key_dups)} rows with duplicated 'genomics_sample_id' after dedup — keeping first.")
+#         patients_merge = patients_merge.drop_duplicates(subset=['genomics_sample_id'], keep='first')
 
-    patient_id_dups = patients_merge[patients_merge.duplicated(subset=['patient_id'], keep=False)]
-    if not patient_id_dups.empty:
-        differing = patient_id_dups.groupby('patient_id').filter(
-            lambda x: x.nunique().drop('patient_id').max() > 1
-        )
-        if not differing.empty:
-            print(f"  Found {differing['patient_id'].nunique()} patients with duplicated patient_id "
-                  f"but differing values in patients merge data.")
+#     patient_id_dups = patients_merge[patients_merge.duplicated(subset=['patient_id'], keep=False)]
+#     if not patient_id_dups.empty:
+#         differing = patient_id_dups.groupby('patient_id').filter(
+#             lambda x: x.nunique().drop('patient_id').max() > 1
+#         )
+#         if not differing.empty:
+#             print(f"  Found {differing['patient_id'].nunique()} patients with duplicated patient_id "
+#                   f"but differing values in patients merge data.")
 
-    df = df.merge(patients_merge, on='genomics_sample_id', how='left')
+#     df = df.merge(patients_merge, on='genomics_sample_id', how='left')
 
-    # --- Merge 2: genomics dates from prescriptions ---
-    presc_cols = ['patient_id', 'genomics', 'genomics_purchase_date',
-                  'genomics_sampling_date', 'genomics_results_date']
-    prescriptions_merge = prescriptions_df[presc_cols].copy()
+#     # --- Merge 2: genomics dates from prescriptions ---
+#     presc_cols = ['patient_id', 'genomics', 'genomics_purchase_date',
+#                   'genomics_sampling_date', 'genomics_results_date']
+#     prescriptions_merge = prescriptions_df[presc_cols].copy()
 
-    date_cols = ['genomics_purchase_date', 'genomics_sampling_date', 'genomics_results_date']
-    for col in date_cols:
-        prescriptions_merge[col] = pd.to_datetime(prescriptions_merge[col], errors='coerce')
+#     date_cols = ['genomics_purchase_date', 'genomics_sampling_date', 'genomics_results_date']
+#     for col in date_cols:
+#         prescriptions_merge[col] = pd.to_datetime(prescriptions_merge[col], errors='coerce')
 
-    agg_cols = ['genomics'] + date_cols
-    multiple_check = prescriptions_merge.groupby('patient_id')[agg_cols].agg(
-        lambda x: x.dropna().nunique()
-    )
-    multi_patients = multiple_check[(multiple_check > 1).any(axis=1)]
-    if not multi_patients.empty:
-        warnings.warn(
-            f"Multiple different non-NA genomics values in prescriptions for "
-            f"{len(multi_patients)} patients. Using first non-NA value. "
-            f"Patient IDs: {multi_patients.index.tolist()}"
-        )
+#     agg_cols = ['genomics'] + date_cols
+#     multiple_check = prescriptions_merge.groupby('patient_id')[agg_cols].agg(
+#         lambda x: x.dropna().nunique()
+#     )
+#     multi_patients = multiple_check[(multiple_check > 1).any(axis=1)]
+#     if not multi_patients.empty:
+#         warnings.warn(
+#             f"Multiple different non-NA genomics values in prescriptions for "
+#             f"{len(multi_patients)} patients. Using first non-NA value. "
+#             f"Patient IDs: {multi_patients.index.tolist()}"
+#         )
 
-    prescriptions_agg = (
-        prescriptions_merge
-        .groupby('patient_id')[agg_cols]
-        .agg('first')
-        .reset_index()
-    )
+#     prescriptions_agg = (
+#         prescriptions_merge
+#         .groupby('patient_id')[agg_cols]
+#         .agg('first')
+#         .reset_index()
+#     )
 
-    if 'patient_id' in df.columns:
-        df = df.merge(prescriptions_agg, on='patient_id', how='left')
-    else:
-        warnings.warn("'patient_id' column not found after merging with patients data. Skipping merge with prescriptions data.")
+#     if 'patient_id' in df.columns:
+#         df = df.merge(prescriptions_agg, on='patient_id', how='left')
+#     else:
+#         warnings.warn("'patient_id' column not found after merging with patients data. Skipping merge with prescriptions data.")
 
-    # --- Final column order and sort ---
-    cols_present = [col for col in complete_column_order if col in df.columns]
-    for col in df.columns:
-        if col not in cols_present:
-            cols_present.append(col)
-    df = df[cols_present]
+#     # --- Final column order and sort ---
+#     cols_present = [col for col in complete_column_order if col in df.columns]
+#     for col in df.columns:
+#         if col not in cols_present:
+#             cols_present.append(col)
+#     df = df[cols_present]
 
-    if 'patient_id' in df.columns:
-        df = df.sort_values(by='patient_id')
-    elif 'genomics_sample_id' in df.columns:
-        df = df.sort_values(by='genomics_sample_id')
+#     if 'patient_id' in df.columns:
+#         df = df.sort_values(by='patient_id')
+#     elif 'genomics_sample_id' in df.columns:
+#         df = df.sort_values(by='genomics_sample_id')
 
-    return df
+#     return df
 
 # Filter records by BMI threshold and GDPR consent
 
