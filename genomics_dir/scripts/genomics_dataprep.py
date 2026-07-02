@@ -235,6 +235,142 @@ def load_alleles(conn, config: timetoevent_config) -> pd.DataFrame:
     )
     return df
 
+def collapse_cumulative_risk_load(
+    alleles_df: pd.DataFrame,
+    expected_snp_count: int = 20,
+    patient_id_col: str = "patient_id",
+    genomics_sample_id_col: str = "genomics_sample_id",
+    rs_id_col: str = "rs_id",
+    risk_allele_count_col: str = "risk_load",
+) -> pd.DataFrame:
+    """
+    Collapse long-format allele rows into one row per genomics sample, containing
+    cumulative genetic risk-load metrics plus basic QC indicators.
+
+    Purpose
+    -------
+    The alleles table is sample-centric rather than medical-record-centric:
+    each patient has a single genomics sample, and allele information is stored
+    as multiple rows per sample (typically one row per SNP). For the time-to-event
+    table, this long allele structure must be reduced to a single record-level
+    summary that can be merged onto the patient / medical-record scaffold.
+
+    What this function does
+    -----------------------
+    1. Checks that the required columns exist.
+    2. Removes rows with missing key identifiers.
+    3. Verifies whether duplicate SNP rows exist within the same sample.
+    4. Aggregates allele rows to one row per (patient_id, genomics_sample_id).
+    5. Computes:
+       - cumulative_risk_allele_count: sum of per-SNP risk allele counts
+       - observed_snp_count: number of unique SNPs observed in that sample
+       - risk_load_complete_20_snps: flag indicating whether the expected panel
+         size was fully observed
+       - risk_load_has_duplicate_snps: flag indicating duplicate SNP rows within sample
+
+    Parameters
+    ----------
+    alleles_df : pd.DataFrame
+        Long-format allele table loaded from SQL.
+    expected_snp_count : int, default 20
+        Expected number of SNPs contributing to the cumulative score.
+    patient_id_col : str, default "patient_id"
+        Patient identifier column.
+    genomics_sample_id_col : str, default "genomics_sample_id"
+        Genomics sample identifier column used as the sample-level safety key.
+    rs_id_col : str, default "rs_id"
+        SNP identifier column.
+    risk_allele_count_col : str, default "risk_load"
+        Numeric per-SNP contribution used in the cumulative score.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per (patient_id, genomics_sample_id), ready to merge into the
+        merged baseline-record scaffold.
+    """
+    required_columns = [
+        patient_id_col,
+        genomics_sample_id_col,
+        rs_id_col,
+        risk_allele_count_col,
+    ]
+    missing_columns = [col for col in required_columns if col not in alleles_df.columns]
+    if missing_columns:
+        raise KeyError(
+            f"collapse_cumulative_risk_load is missing required columns: {missing_columns}"
+        )
+
+    # Work on a copy to avoid mutating upstream objects.
+    working_df = alleles_df.copy()
+
+    # Remove rows that cannot be assigned confidently to a patient/sample.
+    working_df = working_df.dropna(
+        subset=[patient_id_col, genomics_sample_id_col, rs_id_col]
+    ).copy()
+
+    # Coerce the per-SNP contribution column to numeric.
+    # Non-numeric values become NaN and are ignored in the sum.
+    working_df[risk_allele_count_col] = pd.to_numeric(
+        working_df[risk_allele_count_col],
+        errors="coerce"
+    )
+
+    # Mark duplicate SNP entries within the same sample.
+    # This is a QC problem because a given SNP should usually appear once per sample.
+    working_df["is_duplicate_snp_within_sample"] = working_df.duplicated(
+        subset=[patient_id_col, genomics_sample_id_col, rs_id_col],
+        keep=False,
+    ).astype(int)
+
+    collapsed_df = (
+        working_df.groupby([patient_id_col, genomics_sample_id_col], dropna=False)
+        .agg(
+            cumulative_risk_allele_count=(risk_allele_count_col, "sum"),
+            observed_snp_count=(rs_id_col, "nunique"),
+            non_missing_risk_allele_rows=(risk_allele_count_col, lambda s: s.notna().sum()),
+            risk_load_has_duplicate_snps=("is_duplicate_snp_within_sample", "max"),
+        )
+        .reset_index()
+    )
+
+    # QC flag: was the full intended SNP panel observed?
+    collapsed_df["risk_load_complete_20_snps"] = (
+        collapsed_df["observed_snp_count"] == expected_snp_count
+    ).astype(int)
+
+    # Optional descriptive QC category can be useful during debugging and table checks.
+    collapsed_df["risk_load_qc_status"] = np.select(
+        [
+            collapsed_df["risk_load_has_duplicate_snps"] == 1,
+            collapsed_df["observed_snp_count"] < expected_snp_count,
+            collapsed_df["observed_snp_count"] > expected_snp_count,
+        ],
+        [
+            "duplicate_snps_within_sample",
+            "incomplete_snp_panel",
+            "unexpected_extra_snps",
+        ],
+        default="ok",
+    )
+
+    # Sanity check: one row per patient/sample after collapse.
+    if collapsed_df.duplicated(subset=[patient_id_col, genomics_sample_id_col]).any():
+        raise ValueError(
+            "collapse_cumulative_risk_load produced duplicate patient/sample rows."
+        )
+
+    print(
+        "Collapsed cumulative risk load for "
+        f"{len(collapsed_df)} patient-sample combinations."
+    )
+    print(
+        "QC summary:\n"
+        f"{collapsed_df['risk_load_qc_status'].value_counts(dropna=False).to_string()}"
+    )
+
+    return collapsed_df
+
 def extract_baseline(meas: pd.DataFrame) -> pd.DataFrame:
     base = meas[meas["first_in_record"] == 1].copy()
     base = base.rename(columns={
@@ -1162,14 +1298,35 @@ def build_timetoevent_table(config: master_config):
 
     baseline_data = extract_baseline(all_measurements)
     merged_patient_records = merge_baseline_and_records(baseline_data, medical_records_data)
-    alleles_data_agg = alleles_data.groupby('patient_id').agg({
-        'genomics_lab_date': 'first',  # assumes same date across SNPs
-    }).reset_index()
-    # Verify before merging:
-    assert alleles_data_agg["patient_id"].is_unique, \
-        "alleles_data_agg has duplicate patient_ids — agg did not collapse correctly"
 
-    merged_patient_records = merged_patient_records.merge(alleles_data_agg, on=['patient_id'], how='left')
+    # alleles_data_agg = alleles_data.groupby('patient_id').agg({
+    #     'genomics_lab_date': 'first',  # assumes same date across SNPs
+    # }).reset_index()
+    # # Verify before merging:
+    # assert alleles_data_agg["patient_id"].is_unique, \
+    #     "alleles_data_agg has duplicate patient_ids — agg did not collapse correctly"
+
+    # merged_patient_records = merged_patient_records.merge(alleles_data_agg, on=['patient_id'], how='left')
+
+
+    # Collapse long-format allele rows to one row per patient/genomics sample.
+    # This replaces the earlier patient-level genomics_lab_date-only aggregation.
+    alleles_data_agg = collapse_cumulative_risk_load(alleles_data)
+
+    # Verify before merging:
+    assert alleles_data_agg[["patient_id", "genomics_sample_id"]].duplicated().sum() == 0, \
+        "alleles_data_agg has duplicate (patient_id, genomics_sample_id) combinations — collapse did not work correctly"
+
+    # Merge sample-level allele summary onto the record-centric scaffold.
+    # The merge is many-to-one because one genomics sample may map to more than one medical record.
+    merged_patient_records = merged_patient_records.merge(
+        alleles_data_agg,
+        on=["patient_id", "genomics_sample_id"],
+        how="left",
+        validate="many_to_one",
+    )
+
+    
     merged_patient_records_indexed = merged_patient_records.set_index(["patient_id", "medical_record_id"])
     assert merged_patient_records_indexed.index.is_unique, \
         "Duplicate (patient_id, medical_record_id) combinations after merge — check for fan-out in alleles merge"
