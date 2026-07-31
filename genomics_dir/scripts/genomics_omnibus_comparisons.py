@@ -575,7 +575,7 @@ def _make_km(cfg: OmnibusVizConfig):
 
     fig = make_subplots(
         rows=1, cols=2,
-        subplot_titles=["Time to dropout", f"Time to ≥{cfg.wl_target}% weight loss"],
+        subplot_titles=["A. Time to dropout", f"B. Time to ≥{cfg.wl_target}% weight loss"],
         horizontal_spacing=0.12,
     )
 
@@ -639,7 +639,7 @@ def _make_violin(cfg: OmnibusVizConfig):
     df = _load_groups(cfg.paths, cfg.cohort_tables, cfg.cols_violin)
     active = _active_order(df, cfg.master_group_order)
 
-    violin_title = cfg.violin_title or f"Weight loss % and adherence at {cfg.landmark_day} days by personalization group"
+    violin_title = cfg.violin_title or f"C. Weight loss % and adherence at {cfg.landmark_day} days by personalization group"
 
     group_stats = {}
     for group_code in active:
