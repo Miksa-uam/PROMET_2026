@@ -2,6 +2,7 @@
 *.sqlite
 *.db
 *.bundle
+*.zip
 # Virtual environments
 .venv/
 venv/
