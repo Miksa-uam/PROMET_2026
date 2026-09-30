@@ -145,40 +145,48 @@ def plot_clinical_panels(df_features: pd.DataFrame, labels: np.ndarray):
         if y_feat in data.columns:
             ax.set_ylim(*get_lims(data[y_feat], y_feat))
             
-    # 1. Efficacy & Maintenance (The Yo-Yo Axis)
+    # 1. Loss vs Maintenance (The Yo-Yo Axis)
     if 'pct_max_loss' in df_plot.columns and 'pct_regain' in df_plot.columns:
         sns.scatterplot(x='pct_max_loss', y='pct_regain', hue='Cluster', palette='tab10', data=df_plot, ax=axes[0,0], alpha=0.7)
         axes[0,0].set_title("1. Efficacy & Maintenance (The Yo-Yo Axis)")
         axes[0,0].set_xlabel("Peak Efficacy (% Max Loss, negative is loss)")
         axes[0,0].set_ylabel("Long-term Maintenance (% Regain)")
         set_capped_limits(axes[0,0], df_plot, 'pct_max_loss', 'pct_regain')
+
+    # 2. Long-term Maintenance (Observation vs Regain)
+    if 'observation_duration' in df_plot.columns and 'pct_regain' in df_plot.columns:
+        sns.scatterplot(x='observation_duration', y='pct_regain', hue='Cluster', palette='tab10', data=df_plot, ax=axes[0,1], alpha=0.7)
+        axes[0,1].set_title("2. Long-term Maintenance (Observation vs Regain)")
+        axes[0,1].set_xlabel("Longevity (Observation Duration in days)")
+        axes[0,1].set_ylabel("Long-term Maintenance (% Regain)")
+        set_capped_limits(axes[0,1], df_plot, 'observation_duration', 'pct_regain')
     
-    # 2. Body Composition Quality (The Sarcopenic Axis)
+    # 3. Body Composition Quality (The Sarcopenic Axis)
     if 'pct_max_loss' in df_plot.columns and 'lean_loss_coeff' in df_plot.columns:
-        sns.scatterplot(x='pct_max_loss', y='lean_loss_coeff', hue='Cluster', palette='tab10', data=df_plot, ax=axes[0,1], alpha=0.7)
-        axes[0,1].set_title("2. Body Composition Quality (The Sarcopenic Axis)")
-        axes[0,1].set_xlabel("Peak Efficacy (% Max Loss)")
-        axes[0,1].set_ylabel("Muscle Wasting (Lean Loss Coefficient)")
-        set_capped_limits(axes[0,1], df_plot, 'pct_max_loss', 'lean_loss_coeff')
+        sns.scatterplot(x='pct_max_loss', y='lean_loss_coeff', hue='Cluster', palette='tab10', data=df_plot, ax=axes[1,0], alpha=0.7)
+        axes[1,0].set_title("3. Body Composition Quality (The Sarcopenic Axis)")
+        axes[1,0].set_xlabel("Peak Efficacy (% Max Loss)")
+        axes[1,0].set_ylabel("Muscle Wasting (Lean Loss Coefficient)")
+        set_capped_limits(axes[1,0], df_plot, 'pct_max_loss', 'lean_loss_coeff')
         
-    # 3. Early Predictor (The Kinetics Axis)
+    # 4. Early Predictor (The Kinetics Axis)
     if 'early_wl_speed' in df_plot.columns and 'pct_max_loss' in df_plot.columns:
-        sns.scatterplot(x='early_wl_speed', y='pct_max_loss', hue='Cluster', palette='tab10', data=df_plot, ax=axes[1,0], alpha=0.7)
-        axes[1,0].set_title("3. Early Predictor (The Kinetics Axis)")
-        axes[1,0].set_xlabel("Initial Velocity (Early WL Speed %/day)")
-        axes[1,0].set_ylabel("Ultimate Success (% Max Loss)")
-        set_capped_limits(axes[1,0], df_plot, 'early_wl_speed', 'pct_max_loss')
+        sns.scatterplot(x='early_wl_speed', y='pct_max_loss', hue='Cluster', palette='tab10', data=df_plot, ax=axes[1,1], alpha=0.7)
+        axes[1,1].set_title("4. Early Predictor (The Kinetics Axis)")
+        axes[1,1].set_xlabel("Initial Velocity (Early WL Speed %/day)")
+        axes[1,1].set_ylabel("Ultimate Success (% Max Loss)")
+        set_capped_limits(axes[1,1], df_plot, 'early_wl_speed', 'pct_max_loss')
         
-    # 4. Behavioral Engagement (The Digital Phenotype Axis)
-    if 'observation_duration' in df_plot.columns:
-        y_feat = 'longest_gap' if 'longest_gap' in df_plot.columns else 'trajectory_volatility'
-        if y_feat in df_plot.columns:
-            sns.scatterplot(x='observation_duration', y=y_feat, hue='Cluster', palette='tab10', data=df_plot, ax=axes[1,1], alpha=0.7)
-            axes[1,1].set_title(f"4. Behavioral Engagement (The Digital Phenotype)")
-            axes[1,1].set_xlabel("Longevity (Observation Duration in days)")
-            axes[1,1].set_ylabel(f"Consistency ({y_feat})")
-            set_capped_limits(axes[1,1], df_plot, 'observation_duration', y_feat)
-        
+    # # 4. Behavioral Engagement (The Digital Phenotype Axis)
+    # if 'observation_duration' in df_plot.columns:
+    #     y_feat = 'longest_gap' if 'longest_gap' in df_plot.columns else 'trajectory_volatility'
+    #     if y_feat in df_plot.columns:
+    #         sns.scatterplot(x='observation_duration', y=y_feat, hue='Cluster', palette='tab10', data=df_plot, ax=axes[1,2], alpha=0.7)
+    #         axes[1,1].set_title(f"4. Behavioral Engagement (The Digital Phenotype)")
+    #         axes[1,1].set_xlabel("Longevity (Observation Duration in days)")
+    #         axes[1,1].set_ylabel(f"Consistency ({y_feat})")
+    #         set_capped_limits(axes[1,1], df_plot, 'observation_duration', y_feat)
+
     plt.tight_layout()
     plt.show()
 
@@ -243,6 +251,96 @@ def plot_random_trajectories(db_path: str, df_clusters: pd.DataFrame, id_col: st
         ax.set_xlabel("Days from baseline")
         ax.set_ylabel("% Weight Change")
         ax.axhline(0, color='black', linestyle='--', alpha=0.5)
+        
+    for j in range(i+1, len(axes)):
+        axes[j].set_visible(False)
+        
+    plt.tight_layout()
+    plt.show()
+
+def plot_random_trajectories_body_comp(db_path: str, df_clusters: pd.DataFrame, id_col: str = 'patient_id', k: int = 5):
+    """
+    Plots k random trajectories per cluster showing weight, fat, and muscle changes.
+    """
+    conn = sqlite3.connect(db_path)
+    
+    sampled_ids = []
+    for cluster_id in df_clusters['cluster_id'].unique():
+        cluster_df = df_clusters[df_clusters['cluster_id'] == cluster_id]
+        sample = cluster_df.sample(min(k, len(cluster_df)), random_state=np.random.randint(10000))
+        sampled_ids.extend(sample[id_col].tolist())
+        
+    placeholders = ','.join('?' for _ in sampled_ids)
+    query = f"""
+    SELECT {id_col}, measurement_date, weight_kg, "fat_%", "muscle_%" 
+    FROM measurements_filtered 
+    WHERE {id_col} IN ({placeholders})
+    """
+    df_meas = pd.read_sql_query(query, conn, params=sampled_ids)
+    conn.close()
+    
+    # Calculate kg from percentages
+    df_meas['fat_kg'] = (pd.to_numeric(df_meas['fat_%'], errors='coerce') / 100) * df_meas['weight_kg']
+    df_meas['muscle_kg'] = (pd.to_numeric(df_meas['muscle_%'], errors='coerce') / 100) * df_meas['weight_kg']
+    
+    df_meas['measurement_date'] = pd.to_datetime(df_meas['measurement_date'])
+    df_meas['calendar_date'] = df_meas['measurement_date'].dt.normalize()
+    
+    unique_clusters = sorted(df_clusters['cluster_id'].unique())
+    n_clusters = len(unique_clusters)
+    
+    n_cols = min(3, n_clusters)
+    n_rows = int(np.ceil(n_clusters / n_cols))
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(7*n_cols, 5*n_rows), sharex=True, sharey=True)
+    if n_clusters == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+        
+    colors = plt.cm.tab10.colors
+        
+    for i, c_id in enumerate(unique_clusters):
+        ax = axes[i]
+        c_ids = df_clusters[df_clusters['cluster_id'] == c_id][id_col].values
+        
+        color_idx = 0
+        for p_id in c_ids:
+            if p_id not in sampled_ids:
+                continue
+                
+            p_data = df_meas[df_meas[id_col] == p_id].copy()
+            if len(p_data) == 0:
+                continue
+                
+            p_data = p_data.sort_values('calendar_date')
+            t0 = p_data['calendar_date'].iloc[0]
+            w0 = p_data['weight_kg'].iloc[0]
+            f0 = p_data['fat_kg'].iloc[0]
+            m0 = p_data['muscle_kg'].iloc[0]
+            
+            p_data['days'] = (p_data['calendar_date'] - t0).dt.days
+            
+            color = colors[color_idx % len(colors)]
+            label_prefix = f"Pat {color_idx+1}"
+            
+            if w0 > 0:
+                p_data['pct_w'] = ((p_data['weight_kg'] - w0) / w0) * 100
+                # ax.plot(p_data['days'], p_data['pct_w'], color=color, linestyle='-', linewidth=1.5, label=f"{label_prefix} Wt")
+            if pd.notna(f0) and f0 > 0:
+                p_data['pct_f'] = ((p_data['fat_kg'] - f0) / f0) * 100
+                ax.plot(p_data['days'], p_data['pct_f'], color=color, linestyle='-', linewidth=1.5, label=f"{label_prefix} Fat")
+            if pd.notna(m0) and m0 > 0:
+                p_data['pct_m'] = ((p_data['muscle_kg'] - m0) / m0) * 100
+                ax.plot(p_data['days'], p_data['pct_m'], color=color, linestyle='--', linewidth=1.5, label=f"{label_prefix} Musc")
+            
+            color_idx += 1
+            
+        ax.set_title(f"Cluster {c_id} (Body Comp)")
+        ax.set_xlabel("Days from baseline")
+        ax.set_ylabel("% Change")
+        ax.axhline(0, color='black', linestyle='-', alpha=0.3)
+        ax.legend(fontsize='x-small', loc='center left', bbox_to_anchor=(1, 0.5))
         
     for j in range(i+1, len(axes)):
         axes[j].set_visible(False)

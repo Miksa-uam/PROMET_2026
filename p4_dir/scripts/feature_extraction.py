@@ -178,7 +178,7 @@ def extract_features(db_path: str, id_col: str = 'patient_id') -> Tuple[pd.DataF
         # Adherence
         gaps = group['days_from_baseline'].diff().dropna()
         longest_gap = gaps.max() if len(gaps) > 0 else 0
-        n_30d_gaps = (gaps > 30).sum()
+        observation_gap_ratio = longest_gap / follow_up_days if follow_up_days > 0 else 0
         
         features.append({
             id_col: group_id,
@@ -190,12 +190,26 @@ def extract_features(db_path: str, id_col: str = 'patient_id') -> Tuple[pd.DataF
             'lean_loss_coeff': llc,
             'muscle_fat_corr': mf_corr,
             'observation_duration': follow_up_days,
-            'longest_gap': longest_gap,
-            'n_30d_gaps': n_30d_gaps
+            'observation_gap_ratio': observation_gap_ratio
         })
         
     df_features = pd.DataFrame(features)
     df_excluded = pd.DataFrame(excluded)
+    
+    # Residualize time-bound features
+    if len(df_features) > 1 and df_features['observation_duration'].var() > 0:
+        X_dur = sm.add_constant(df_features['observation_duration'])
+        
+        # adj_pct_max_loss
+        model_loss = sm.OLS(df_features['pct_max_loss'], X_dur).fit()
+        df_features['adj_pct_max_loss'] = model_loss.resid
+        
+        # adj_pct_regain
+        model_regain = sm.OLS(df_features['pct_regain'], X_dur).fit()
+        df_features['adj_pct_regain'] = model_regain.resid
+    else:
+        df_features['adj_pct_max_loss'] = df_features['pct_max_loss']
+        df_features['adj_pct_regain'] = df_features['pct_regain']
     
     print(f"\n--- Feature Extraction Summary ---")
     print(f"Retained: {len(df_features)} {id_col} units for clustering.")

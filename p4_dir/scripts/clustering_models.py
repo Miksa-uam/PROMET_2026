@@ -20,6 +20,8 @@ FEATURE_BLOCKS = {
     'Kinetic': [
         'pct_max_loss', 
         'pct_regain', 
+        # 'adj_pct_max_loss', 
+        # 'adj_pct_regain', 
         'early_wl_speed', 
         'time_to_nadir_ratio',
         'trajectory_volatility'
@@ -31,6 +33,8 @@ FEATURE_BLOCKS = {
     'Physio': [
         'pct_max_loss', 
         'pct_regain', 
+        # 'adj_pct_max_loss', 
+        # 'adj_pct_regain', 
         'early_wl_speed', 
         'time_to_nadir_ratio', 
         'trajectory_volatility',
@@ -39,20 +43,36 @@ FEATURE_BLOCKS = {
     ],
     'Behavioral': [
         'observation_duration', 
-        'longest_gap', 
-        ], # 'n_30d_gaps'
-    'Holistic': [
+        'observation_gap_ratio', 
+        ],
+    'Holistic raw': [
         'pct_max_loss', 
         'pct_regain', 
+        # 'adj_pct_max_loss', 
+        # 'adj_pct_regain', 
         'early_wl_speed', 
         'time_to_nadir_ratio', 
         'trajectory_volatility',
         'lean_loss_coeff', 
         'muscle_fat_corr',
         'observation_duration', 
-        'longest_gap', 
-    ]  # 'n_30d_gaps'
-}
+        'observation_gap_ratio', 
+    ],
+
+    'Holistic adjusted': [
+        # 'pct_max_loss', 
+        # 'pct_regain', 
+        'adj_pct_max_loss', 
+        'adj_pct_regain', 
+        'early_wl_speed', 
+        'time_to_nadir_ratio', 
+        'trajectory_volatility',
+        'lean_loss_coeff', 
+        'muscle_fat_corr',
+        'observation_duration', 
+        'observation_gap_ratio', 
+    ]
+}   
 
 def prepare_data(df_features: pd.DataFrame, block: str = 'Holistic') -> pd.DataFrame:
     """

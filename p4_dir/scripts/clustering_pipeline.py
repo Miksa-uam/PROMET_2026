@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
 from clustering_models import prepare_data, fit_model
-from clustering_eval import run_clustering_grid_search, evaluate_predictive_utility, evaluate_clusters
+from clustering_eval import run_clustering_grid_search, evaluate_predictive_utility, evaluate_clusters, print_cluster_summary
 from clustering_viz import (
     plot_pca, plot_umap, plot_tsne, 
-    plot_random_trajectories, plot_clinical_panels, 
+    plot_random_trajectories, plot_random_trajectories_body_comp, plot_clinical_panels, 
     plot_elbows, plot_dendrogram
 )
 
@@ -107,6 +107,9 @@ def run_clustering_pipeline(df_features: pd.DataFrame, db_path: str, blocks: lis
     
     print("\n--- 4. TRAJECTORY HOMOGENEITY SAMPLES ---")
     plot_random_trajectories(db_path=db_path, df_clusters=df_clusters, id_col=id_col, k=15)
+    plot_random_trajectories_body_comp(db_path=db_path, df_clusters=df_clusters, id_col=id_col, k=5)
     
     print("\n--- 5. PREDICTIVE UTILITY ---")
     evaluate_predictive_utility(db_path, df_clusters, id_col=id_col)
+    
+    print_cluster_summary(db_path, df_clusters, id_col=id_col)

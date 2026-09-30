@@ -133,6 +133,7 @@ def evaluate_predictive_utility(db_path: str, df_clusters: pd.DataFrame, id_col:
     
     df_meas['measurement_date'] = pd.to_datetime(df_meas['measurement_date'])
     df_meas = df_meas.sort_values([id_col, 'measurement_date'])
+
     df_bmi = df_meas.groupby(id_col).first().reset_index()
     
     df_baseline = df_demo.merge(df_bmi[[id_col, 'bmi']], on=id_col, how='inner')
@@ -168,3 +169,124 @@ def evaluate_predictive_utility(db_path: str, df_clusters: pd.DataFrame, id_col:
     except Exception as e:
         print(f"Regression failed: {e}")
         return None
+
+def print_cluster_summary(db_path: str, df_clusters: pd.DataFrame, id_col: str = 'patient_id'):
+    """
+    Prints a rich comparative table of all clinical features across clusters,
+    re-using the logic from the DTW pipeline while including the new custom features.
+    """
+    import sys
+    import os
+    import numpy as np
+    from scipy import stats
+    from statsmodels.stats.multitest import multipletests
+    from IPython.display import display
+    
+    print("\n--- 6. CLUSTER PROFILES (FULL CLINICAL ASSESSMENT) ---")
+    
+    dtw_path = os.path.join(os.path.dirname(__file__), 'dtw_trajectory_clustering')
+    if dtw_path not in sys.path:
+        sys.path.append(dtw_path)
+        
+    try:
+        from cluster_comparisons import fetch_measurements_metrics, fetch_medical_records, fetch_alleles
+        
+        # 1. Fetch Data
+        df_meas = fetch_measurements_metrics(db_path, id_col=id_col)
+        df_med = fetch_medical_records(db_path, id_col=id_col)
+        df_gen = fetch_alleles(db_path)
+        
+        # 2. Merge Baseline Data
+        df = df_med.merge(df_meas, on=id_col, how='inner')
+        df = df.merge(df_gen, on='patient_id', how='left')
+        
+        # 3. Merge with Clustering Features
+        df_full = df.merge(df_clusters, on=id_col, how='inner')
+        
+        # 4. Filter Noise
+        df_full = df_full[df_full['cluster_id'] != -1]
+        valid_cids = sorted(df_full['cluster_id'].unique())
+        cohort_names = {cid: f"Cluster {cid}" for cid in valid_cids}
+        
+        # 5. Statistical Comparisons
+        skip_cols = [id_col, 'patient_id', 'medical_record_id', 'medical_record_sequence', 'cluster_id', 'n_meas', 'Cluster']
+        test_cols = [c for c in df_full.columns if c not in skip_cols and pd.api.types.is_numeric_dtype(df_full[c])]
+        
+        results = []
+        n_row = {'Variable': 'Cluster Size (N)'}
+        for cid in valid_cids:
+            n_row[cohort_names[cid]] = str(len(df_full[df_full['cluster_id'] == cid]))
+        n_row['p_value_raw'] = np.nan
+        results.append(n_row)
+        
+        for col in test_cols:
+            unique_vals = set(df_full[col].dropna().unique())
+            is_categorical = unique_vals.issubset({0, 1, 0.0, 1.0})
+            
+            row = {'Variable': col}
+            groups_data = []
+            
+            for cid in valid_cids:
+                cname = cohort_names[cid]
+                data = df_full[df_full['cluster_id'] == cid][col].dropna()
+                groups_data.append(data.values)
+                
+                if len(data) == 0:
+                    row[cname] = "N/A"
+                elif is_categorical:
+                    pct = (data.sum() / len(data)) * 100
+                    row[cname] = f"{pct:.1f}%"
+                else:
+                    med = np.median(data)
+                    q25 = np.percentile(data, 25)
+                    q75 = np.percentile(data, 75)
+                    row[cname] = f"{med:.2f} ({q25:.2f}-{q75:.2f})"
+                    
+            if sum(len(g) for g in groups_data) == 0 or any(len(g) == 0 for g in groups_data):
+                row['p_value_raw'] = np.nan
+            else:
+                try:
+                    if is_categorical:
+                        counts = [g.sum() for g in groups_data]
+                        nobs = [len(g) for g in groups_data]
+                        from statsmodels.stats.proportion import proportions_chisquare
+                        stat, pval, _ = proportions_chisquare(counts, nobs)
+                        row['p_value_raw'] = pval
+                    else:
+                        normality = [stats.shapiro(g)[1] > 0.05 for g in groups_data if len(g) >= 3]
+                        if len(groups_data) == 2:
+                            if all(normality) and len(normality) == 2:
+                                _, pval = stats.ttest_ind(groups_data[0], groups_data[1], equal_var=False)
+                            else:
+                                _, pval = stats.mannwhitneyu(groups_data[0], groups_data[1])
+                        else:
+                            if all(normality) and len(normality) == len(groups_data):
+                                _, pval = stats.f_oneway(*groups_data)
+                            else:
+                                _, pval = stats.kruskal(*groups_data)
+                        row['p_value_raw'] = pval
+                except Exception:
+                    row['p_value_raw'] = np.nan
+                    
+            results.append(row)
+            
+        df_res = pd.DataFrame(results)
+        p_vals = df_res['p_value_raw'].values
+        valid_idx = ~np.isnan(p_vals)
+        df_res['p_value_fdr'] = np.nan
+        if valid_idx.sum() > 0:
+            df_res.loc[valid_idx, 'p_value_fdr'] = multipletests(p_vals[valid_idx], method='fdr_bh')[1]
+            
+        def format_p(p):
+            if pd.isna(p): return "N/A"
+            if p < 0.001: return "<0.001"
+            return f"{p:.3f}"
+            
+        df_res['p_value'] = df_res['p_value_fdr'].apply(format_p)
+        df_res = df_res.drop(columns=['p_value_raw', 'p_value_fdr'])
+        
+        with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+            display(df_res)
+        
+    except Exception as e:
+        print(f"Could not run DTW comparison logic: {e}")
