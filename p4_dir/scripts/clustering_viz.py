@@ -190,9 +190,9 @@ def plot_clinical_panels(df_features: pd.DataFrame, labels: np.ndarray):
     plt.tight_layout()
     plt.show()
 
-def plot_random_trajectories(db_path: str, df_clusters: pd.DataFrame, id_col: str = 'patient_id', k: int = 15):
+def plot_random_trajectories(db_path: str, df_clusters: pd.DataFrame, id_col: str = 'patient_id', k: int = 15, time_window: int = None):
     """
-    Plots k random weight-loss trajectories per cluster to visually validate intra-cluster homogeneity.
+    Plots k random weight-loss trajectories per cluster. If time_window is provided, truncates plots at that day.
     """
     conn = sqlite3.connect(db_path)
     
@@ -214,7 +214,9 @@ def plot_random_trajectories(db_path: str, df_clusters: pd.DataFrame, id_col: st
     df_meas['measurement_date'] = pd.to_datetime(df_meas['measurement_date'])
     df_meas['calendar_date'] = df_meas['measurement_date'].dt.normalize()
     
-    unique_clusters = sorted(df_clusters['cluster_id'].unique())
+    unique_clusters_raw = df_clusters['cluster_id'].unique()
+    numeric_cids = sorted([c for c in unique_clusters_raw if c != 'Dropout'])
+    unique_clusters = numeric_cids + (['Dropout'] if 'Dropout' in unique_clusters_raw else [])
     n_clusters = len(unique_clusters)
     
     n_cols = min(3, n_clusters)
@@ -245,9 +247,15 @@ def plot_random_trajectories(db_path: str, df_clusters: pd.DataFrame, id_col: st
             p_data['days'] = (p_data['calendar_date'] - t0).dt.days
             p_data['pct_loss'] = ((p_data['weight_kg'] - w0) / w0) * 100
             
+            if time_window is not None:
+                p_data = p_data[p_data['days'] <= time_window]
+                if len(p_data) == 0:
+                    continue
+            
             ax.plot(p_data['days'], p_data['pct_loss'], alpha=0.6, linewidth=1.5)
             
-        ax.set_title(f"Cluster {c_id}")
+        title_suffix = f" (truncated at {time_window}d)" if time_window is not None else ""
+        ax.set_title(f"Cluster {c_id}{title_suffix}")
         ax.set_xlabel("Days from baseline")
         ax.set_ylabel("% Weight Change")
         ax.axhline(0, color='black', linestyle='--', alpha=0.5)
@@ -258,9 +266,9 @@ def plot_random_trajectories(db_path: str, df_clusters: pd.DataFrame, id_col: st
     plt.tight_layout()
     plt.show()
 
-def plot_random_trajectories_body_comp(db_path: str, df_clusters: pd.DataFrame, id_col: str = 'patient_id', k: int = 5):
+def plot_random_trajectories_body_comp(db_path: str, df_clusters: pd.DataFrame, id_col: str = 'patient_id', k: int = 5, time_window: int = None):
     """
-    Plots k random trajectories per cluster showing weight, fat, and muscle changes.
+    Plots k random trajectories per cluster showing weight, fat, and muscle changes. If time_window is provided, truncates plots at that day.
     """
     conn = sqlite3.connect(db_path)
     
@@ -286,7 +294,9 @@ def plot_random_trajectories_body_comp(db_path: str, df_clusters: pd.DataFrame, 
     df_meas['measurement_date'] = pd.to_datetime(df_meas['measurement_date'])
     df_meas['calendar_date'] = df_meas['measurement_date'].dt.normalize()
     
-    unique_clusters = sorted(df_clusters['cluster_id'].unique())
+    unique_clusters_raw = df_clusters['cluster_id'].unique()
+    numeric_cids = sorted([c for c in unique_clusters_raw if c != 'Dropout'])
+    unique_clusters = numeric_cids + (['Dropout'] if 'Dropout' in unique_clusters_raw else [])
     n_clusters = len(unique_clusters)
     
     n_cols = min(3, n_clusters)
@@ -321,6 +331,11 @@ def plot_random_trajectories_body_comp(db_path: str, df_clusters: pd.DataFrame, 
             
             p_data['days'] = (p_data['calendar_date'] - t0).dt.days
             
+            if time_window is not None:
+                p_data = p_data[p_data['days'] <= time_window]
+                if len(p_data) == 0:
+                    continue
+            
             color = colors[color_idx % len(colors)]
             label_prefix = f"Pat {color_idx+1}"
             
@@ -336,7 +351,8 @@ def plot_random_trajectories_body_comp(db_path: str, df_clusters: pd.DataFrame, 
             
             color_idx += 1
             
-        ax.set_title(f"Cluster {c_id} (Body Comp)")
+        title_suffix = f" (truncated at {time_window}d)" if time_window is not None else ""
+        ax.set_title(f"Cluster {c_id} (Body Comp){title_suffix}")
         ax.set_xlabel("Days from baseline")
         ax.set_ylabel("% Change")
         ax.axhline(0, color='black', linestyle='-', alpha=0.3)

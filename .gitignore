@@ -3,9 +3,14 @@
 *.db
 *.bundle
 *.zip
+
+# Raw data files - sensitive and large files
+DB_raw/
+
 # Virtual environments
 .venv/
 venv/
+
 # OS and Python noise
 .DS_Store
 Thumbs.db

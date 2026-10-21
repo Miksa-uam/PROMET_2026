@@ -8,7 +8,7 @@ import seaborn as sns
 import warnings
 from typing import Tuple
 
-def extract_features(db_path: str, id_col: str = 'patient_id') -> Tuple[pd.DataFrame, pd.DataFrame]:
+def extract_features(db_path: str, id_col: str = 'patient_id', time_window: int = None, window_tolerance: int = 15) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Extracts trajectory, kinetics, body composition, and adherence features
     for clustering weight-loss trajectories.
@@ -73,12 +73,27 @@ def extract_features(db_path: str, id_col: str = 'patient_id') -> Tuple[pd.DataF
         t0 = group['calendar_date'].iloc[0]
         group['days_from_baseline'] = (group['calendar_date'] - t0).dt.days
         
+        if time_window is not None:
+            # Look for measurements within the tolerance window
+            valid_rows = group[(group['days_from_baseline'] >= time_window - window_tolerance) & 
+                               (group['days_from_baseline'] <= time_window + window_tolerance)]
+            
+            if len(valid_rows) == 0:
+                excluded.append({id_col: group_id, 'reason': f'no data near {time_window} days'})
+                continue
+            
+            # Find the index of the measurement closest to the exact time window
+            closest_idx = (valid_rows['days_from_baseline'] - time_window).abs().idxmin()
+            
+            # Truncate the trajectory to drop all entries after this measurement
+            group = group.loc[:closest_idx].copy()
+            
         n_meas = len(group)
         follow_up_days = group['days_from_baseline'].iloc[-1]
         
         # Exclusion criteria: Must have >= 3 measurements AND >= 30 days follow-up
         if n_meas < 3 or follow_up_days < 30:
-            excluded.append({id_col: group_id, 'n_meas': n_meas, 'follow_up_days': follow_up_days})
+            excluded.append({id_col: group_id, 'n_meas': n_meas, 'follow_up_days': follow_up_days, 'reason': 'insufficient data'})
             continue
             
         b_weight = group['weight_kg'].iloc[0]

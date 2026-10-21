@@ -71,6 +71,18 @@ FEATURE_BLOCKS = {
         'muscle_fat_corr',
         'observation_duration', 
         'observation_gap_ratio', 
+    ],
+
+    'Holistic windowed': [
+        'pct_max_loss', 
+        'pct_regain', 
+        'early_wl_speed', 
+        'time_to_nadir_ratio', 
+        'trajectory_volatility',
+        'lean_loss_coeff', 
+        'muscle_fat_corr',
+        # 'observation_duration',  <-- Excluded explicitly for time-window runs
+        'observation_gap_ratio', 
     ]
 }   
 

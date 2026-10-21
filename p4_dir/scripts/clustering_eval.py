@@ -201,12 +201,22 @@ def print_cluster_summary(db_path: str, df_clusters: pd.DataFrame, id_col: str =
         df = df.merge(df_gen, on='patient_id', how='left')
         
         # 3. Merge with Clustering Features
-        df_full = df.merge(df_clusters, on=id_col, how='inner')
+        # Using left merge so patients who didn't survive to the time window become Dropouts
+        df_full = df.merge(df_clusters, on=id_col, how='left')
         
-        # 4. Filter Noise
-        df_full = df_full[df_full['cluster_id'] != -1]
-        valid_cids = sorted(df_full['cluster_id'].unique())
-        cohort_names = {cid: f"Cluster {cid}" for cid in valid_cids}
+        # 4. Filter Noise and Label Dropouts
+        # We don't want to include HDBSCAN noise (-1) as a clinical cluster
+        df_full = df_full[df_full['cluster_id'] != -1].copy()
+        
+        # Label NaNs as 'Dropout'
+        df_full['cluster_id'] = df_full['cluster_id'].fillna('Dropout')
+        
+        # Build valid_cids, putting Dropout at the end
+        unique_cids = df_full['cluster_id'].unique()
+        numeric_cids = sorted([c for c in unique_cids if c != 'Dropout'])
+        valid_cids = numeric_cids + (['Dropout'] if 'Dropout' in unique_cids else [])
+        
+        cohort_names = {cid: f"Cluster {cid}" if cid != 'Dropout' else "Dropout" for cid in valid_cids}
         
         # 5. Statistical Comparisons
         skip_cols = [id_col, 'patient_id', 'medical_record_id', 'medical_record_sequence', 'cluster_id', 'n_meas', 'Cluster']

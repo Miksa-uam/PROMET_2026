@@ -8,7 +8,7 @@ from clustering_viz import (
     plot_elbows, plot_dendrogram
 )
 
-def run_clustering_pipeline(df_features: pd.DataFrame, db_path: str, blocks: list, models: list, k_range: list, id_col: str = 'patient_id'):
+def run_clustering_pipeline(df_features: pd.DataFrame, db_path: str, blocks: list, models: list, k_range: list, id_col: str = 'patient_id', time_window: int = None, df_excluded: list = None):
     """
     Unified entrypoint for clustering.
     If multiple blocks, models, or k's are provided, it runs a full grid search, plots elbows,
@@ -105,11 +105,26 @@ def run_clustering_pipeline(df_features: pd.DataFrame, db_path: str, blocks: lis
     print("\n--- 3. CLINICAL CHARACTERIZATION (5th-95th Percentile Capped) ---")
     plot_clinical_panels(df_clean, labels)
     
-    print("\n--- 4. TRAJECTORY HOMOGENEITY SAMPLES ---")
-    plot_random_trajectories(db_path=db_path, df_clusters=df_clusters, id_col=id_col, k=15)
-    plot_random_trajectories_body_comp(db_path=db_path, df_clusters=df_clusters, id_col=id_col, k=5)
+    plot_clusters = df_clusters.copy()
+    if df_excluded is not None and len(df_excluded) > 0:
+        df_exc = pd.DataFrame(df_excluded)
+        if id_col in df_exc.columns:
+            df_exc['cluster_id'] = 'Dropout'
+            df_exc = df_exc[[id_col, 'cluster_id']]
+            plot_clusters = pd.concat([plot_clusters, df_exc], ignore_index=True)
+            
+    print("\n--- 4. TRAJECTORY HOMOGENEITY SAMPLES (GLOBAL) ---")
+    plot_random_trajectories(db_path=db_path, df_clusters=plot_clusters, id_col=id_col, k=15)
+    plot_random_trajectories_body_comp(db_path=db_path, df_clusters=plot_clusters, id_col=id_col, k=5)
+    
+    if time_window is not None:
+        print(f"\n--- 4.1 TRAJECTORY HOMOGENEITY SAMPLES ({time_window}d TRUNCATED) ---")
+        plot_random_trajectories(db_path=db_path, df_clusters=plot_clusters, id_col=id_col, k=15, time_window=time_window)
+        plot_random_trajectories_body_comp(db_path=db_path, df_clusters=plot_clusters, id_col=id_col, k=5, time_window=time_window)
     
     print("\n--- 5. PREDICTIVE UTILITY ---")
     evaluate_predictive_utility(db_path, df_clusters, id_col=id_col)
     
     print_cluster_summary(db_path, df_clusters, id_col=id_col)
+    
+    return df_clusters
