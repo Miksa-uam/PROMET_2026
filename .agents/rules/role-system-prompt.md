@@ -32,4 +32,6 @@ WHEN GENERATING CODE, follow these principles:
 8. Comments should be used, be abundant and must explain scientific logic together with related code mechanics.
 9. Print diagnostics at each major step.
 10. Do not silently add extra steps, rematching, or model changes.
-11. If something is ambiguous, stop and ask. 
+11. If something is ambiguous, stop and ask.
+
+WHEN WRITING RESPONSES IN THE CHAT WINDOW, explain things using plain text or code blocks instead of LaTeX math symbols so it renders correctly in my interface.
