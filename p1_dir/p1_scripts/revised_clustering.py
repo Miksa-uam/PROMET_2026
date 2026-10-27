@@ -72,7 +72,7 @@ Pseudocode:
 3. Save unified performance table and unified patient labels table to SQLite.
 4. Generate multi-panel evaluation profile figures.
 
-Author: Clinical Data Science Pair Programmer
+Author: Gemini 3.8 Flash High in Antigravity
 Date: October 2026
 Target Environment: Python 3.10+ / SQLite3 / NumPy / SciPy / scikit-learn / joblib / matplotlib
 ================================================================================
@@ -124,10 +124,12 @@ DEFAULT_DISTANCE_TABLES: List[str] = [
     "hybrid_wgc07_eb03",
 ]
 
-# Default table names for database persistence
-DEFAULT_PERFORMANCE_TABLE: str = "clustering_performance_scores"
-DEFAULT_LABELS_TABLE: str = "clustering_labels"
+# Default random seed root for PAM multi-start and subsampling stability
+DEFAULT_RANDOM_STATE: int = 42
 
+# Default table names for database persistence
+DEFAULT_PERFORMANCE_TABLE: str = "jaccard_gower_cluster_perf_scores"
+DEFAULT_LABELS_TABLE: str = "jaccard_gower_cluster_labels"
 
 # =============================================================================
 # DATA LOADING & VALIDATION
@@ -136,8 +138,7 @@ DEFAULT_LABELS_TABLE: str = "clustering_labels"
 def load_distance_matrix_from_db(
     db_path: str,
     table_name: str,
-    fallback_db_path: Optional[str] = None,
-) -> Tuple[np.ndarray, List[str], np.ndarray]:
+    fallback_db_path: Optional[str] = None,) -> Tuple[np.ndarray, List[str], np.ndarray]:
     """
     Loads a saved square distance matrix from SQLite, extracting patient identifiers and average distances.
     Conventionally looks in the input database (db_path), falling back to fallback_db_path if necessary.
@@ -224,8 +225,7 @@ def load_distance_matrix_from_db(
 
 def compute_cluster_medoids_and_inertia(
     dist_matrix: np.ndarray,
-    labels: np.ndarray,
-) -> Tuple[np.ndarray, float]:
+    labels: np.ndarray,) -> Tuple[np.ndarray, float]:
     """
     Identifies the empirical medoid for each cluster and calculates total inertia.
 
@@ -287,8 +287,7 @@ def fit_single_pam(
     distance_matrix: np.ndarray,
     k: int,
     seed: int,
-    max_iter: int = 300,
-) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    max_iter: int = 300,) -> Tuple[np.ndarray, np.ndarray, float, int]:
     """Fits PAM for a single seed using k-medoids++ initialization."""
     kmedoids = KMedoids(
         n_clusters=k,
@@ -306,10 +305,11 @@ def fit_pam(
     distance_matrix: np.ndarray,
     k: int,
     n_runs: int = DEFAULT_PAM_RUNS,
-    seed: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    random_state: int = DEFAULT_RANDOM_STATE,
+    seed: Optional[int] = None,) -> Tuple[np.ndarray, np.ndarray, float, int]:
     """
-    Fits PAM across n_runs random seeds with k-medoids++ and returns the minimum inertia solution.
+    Fits PAM across n_runs random seeds using k-medoids++ probabilistic initialization
+    anchored to a master root seed (default: 42) and returns the minimum inertia solution.
     """
     if seed is not None:
         return fit_single_pam(distance_matrix, k, seed=seed)
@@ -320,7 +320,8 @@ def fit_pam(
     best_seed = -1
 
     for s in range(n_runs):
-        labels, medoids, inertia, current_seed = fit_single_pam(distance_matrix, k, seed=s)
+        run_seed = random_state + s
+        labels, medoids, inertia, current_seed = fit_single_pam(distance_matrix, k, seed=run_seed)
         if inertia < best_inertia:
             best_inertia = inertia
             best_labels = labels
@@ -335,8 +336,7 @@ def fit_pam(
 def fit_hclust_complete(
     distance_matrix: np.ndarray,
     k: int,
-    seed: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    seed: Optional[int] = None,) -> Tuple[np.ndarray, np.ndarray, float, int]:
     """
     Fits Hierarchical Agglomerative Clustering with Complete Linkage (Farthest Neighbor).
     Identifies empirical cluster medoids and calculates total inertia for consistency with PAM.
@@ -356,8 +356,7 @@ def fit_hclust_complete(
 def fit_hclust_average(
     distance_matrix: np.ndarray,
     k: int,
-    seed: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    seed: Optional[int] = None,) -> Tuple[np.ndarray, np.ndarray, float, int]:
     """
     Fits Hierarchical Agglomerative Clustering with Average Linkage (UPGMA).
     Identifies empirical cluster medoids and calculates total inertia for consistency with PAM.
@@ -403,8 +402,7 @@ ALGORITHM_REGISTRY: Dict[str, Dict[str, any]] = {
 def compute_cluster_metrics(
     distance_matrix: np.ndarray,
     labels: np.ndarray,
-    mds_coords: Optional[np.ndarray] = None,
-) -> Dict[str, float]:
+    mds_coords: Optional[np.ndarray] = None,) -> Dict[str, float]:
     """
     Computes mathematical cluster validity metrics.
 
@@ -456,8 +454,7 @@ def _single_subsample_worker(
     full_labels: np.ndarray,
     k: int,
     subsample_size: int,
-    subsample_seed: int,
-) -> float:
+    subsample_seed: int,) -> float:
     """Helper worker evaluating Adjusted Rand Index on an 80% subsample without replacement."""
     rng = np.random.RandomState(subsample_seed)
     n_samples = distance_matrix.shape[0]
@@ -487,8 +484,8 @@ def evaluate_cluster_stability_subsampling(
     k: int,
     n_subsamples: int = DEFAULT_N_SUBSAMPLES,
     subsample_ratio: float = DEFAULT_SUBSAMPLE_RATIO,
-    n_jobs: int = -1,
-) -> Tuple[float, float, List[float]]:
+    random_state: int = DEFAULT_RANDOM_STATE,
+    n_jobs: int = -1,) -> Tuple[float, float, List[float]]:
     """
     Assesses cluster stability via Monte Carlo subsampling without replacement (Monti et al., 2003).
     Parallelized across all CPU cores.
@@ -503,7 +500,7 @@ def evaluate_cluster_stability_subsampling(
             full_labels=full_labels,
             k=k,
             subsample_size=subsample_size,
-            subsample_seed=iter_idx * 100 + k,
+            subsample_seed=random_state * 10000 + iter_idx * 100 + k,
         )
         for iter_idx in range(n_subsamples)
     )
@@ -517,14 +514,15 @@ def evaluate_cluster_stability_subsampling(
 # HIERARCHICAL DENDROGRAM VISUALIZATION
 # =============================================================================
 
-def plot_hierarchical_dendrograms(
+def plot_single_hierarchical_dendrogram(
     dist_matrix: np.ndarray,
     table_name: str,
+    linkage_method: str = "complete",
     output_dir: Optional[str] = None,
-    k_cutoff: int = 6,
-) -> None:
+    k_cutoff: int = 6,) -> None:
     """
-    Generates and saves side-by-side hierarchical dendrograms for Complete and Average Linkage.
+    Generates and saves a clean, standalone hierarchical dendrogram for a single linkage method.
+    Safely overwrites any existing file with the same name.
 
     Parameters:
     -----------
@@ -532,61 +530,76 @@ def plot_hierarchical_dendrograms(
         (N x N) distance matrix.
     table_name : str
         Name of the distance matrix table (used for titles and filenames).
+    linkage_method : str
+        Linkage algorithm ('complete' or 'average').
     output_dir : Optional[str]
         Directory to save the resulting image file.
     k_cutoff : int
         Number of clusters to highlight with horizontal threshold line (default: 6).
     """
+    method_titles = {
+        "complete": "Complete Linkage (Farthest Neighbor)",
+        "average": "Average Linkage (UPGMA)",
+    }
+    title = method_titles.get(linkage_method, f"{linkage_method.title()} Linkage")
+
     condensed = squareform(dist_matrix)
-    fig, axes = plt.subplots(1, 2, figsize=(18, 6.5))
+    Z = linkage(condensed, method=linkage_method)
 
-    methods = [
-        ("complete", "Complete Linkage (Farthest Neighbor)", axes[0]),
-        ("average", "Average Linkage (UPGMA)", axes[1]),
-    ]
+    cut_step = len(Z) - k_cutoff
+    if 0 <= cut_step < len(Z):
+        cut_height = Z[cut_step, 2]
+    else:
+        cut_height = Z[-1, 2] * 0.7
 
-    for method, title, ax in methods:
-        Z = linkage(condensed, method=method)
-        # Determine height threshold corresponding to k_cutoff
-        # In linkage matrix Z of shape (N-1, 4), the merge producing k clusters is step (N - k)
-        cut_step = len(Z) - k_cutoff
-        if 0 <= cut_step < len(Z):
-            cut_height = Z[cut_step, 2]
-        else:
-            cut_height = Z[-1, 2] * 0.7
+    fig, ax = plt.subplots(figsize=(11, 6))
+    dendrogram(
+        Z,
+        ax=ax,
+        color_threshold=cut_height,
+        above_threshold_color="#555555",
+        no_labels=True,
+    )
+    ax.axhline(
+        cut_height,
+        color="#d95f02",
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Cutoff Threshold (k≈{k_cutoff}, h={cut_height:.3f})",
+    )
+    ax.set_title(
+        f"Hierarchical Clustering Dendrogram: {title}\nDistance Matrix: '{table_name}'",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.set_xlabel(f"Cohort Patients (N={dist_matrix.shape[0]})", fontsize=10)
+    ax.set_ylabel("Cophenetic Distance", fontsize=10)
+    ax.grid(True, linestyle=":", alpha=0.5)
+    ax.legend(fontsize=9, loc="upper right")
 
-        dendrogram(
-            Z,
-            ax=ax,
-            color_threshold=cut_height,
-            above_threshold_color="#555555",
-            no_labels=True,
-        )
-        ax.axhline(cut_height, color="#d95f02", linestyle="--", linewidth=1.5, label=f"Threshold (k≈{k_cutoff}, h={cut_height:.3f})")
-        ax.set_title(f"{title}\nDistance Matrix: '{table_name}'", fontsize=11, fontweight="bold")
-        ax.set_xlabel(f"Cohort Patients (N={dist_matrix.shape[0]})", fontsize=10)
-        ax.set_ylabel("Cophenetic Distance", fontsize=10)
-        ax.grid(True, linestyle=":", alpha=0.5)
-        ax.legend(fontsize=9, loc="upper right")
-
-    plt.suptitle(f"Hierarchical Clustering Dendrograms across Patient Cohort ({table_name})", fontsize=13, y=1.02)
     plt.tight_layout()
 
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-        save_path = os.path.join(output_dir, f"dendrogram_{table_name}.png")
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        print(f"[Plotting] Dendrogram saved to: {save_path}")
+        save_path = os.path.join(output_dir, f"dendrogram_{table_name}_{linkage_method}.png")
+        if os.path.exists(save_path):
+            try:
+                os.chmod(save_path, 0o777)
+                os.remove(save_path)
+            except Exception:
+                pass
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"[Plotting] Standalone dendrogram saved (overwriting existing) to: {save_path}")
 
-    # Display in Jupyter notebook if interactive
+    # Display in Jupyter notebook if interactive, then safely release figure resources
     try:
         from IPython import get_ipython
         if get_ipython() is not None:
             plt.show()
-        else:
-            plt.close()
     except Exception:
-        plt.close()
+        pass
+    finally:
+        plt.close(fig)
 
 
 # =============================================================================
@@ -595,16 +608,22 @@ def plot_hierarchical_dendrograms(
 
 def plot_clustering_evaluation_profiles(
     performance_df: pd.DataFrame,
-    save_path: Optional[str] = None,
-) -> None:
+    save_path: Optional[str] = None,) -> None:
     """
-    Generates multi-panel comparative evaluation plots comparing algorithms and distance configurations
-    across Silhouette, Inertia, and Subsampling Stability ARI.
+    Generates a 5-panel comparative evaluation composite plot comparing algorithms and distance configurations.
+    Layout: 2 rows x 3 columns (3 on top, 2 on bottom, 6th cell hidden).
+    Panel order:
+      1. Silhouette Score (Higher is Better)
+      2. Davies-Bouldin Index (Lower is Better)
+      3. Calinski-Harabasz Index (Higher is Better)
+      4. Total Cluster Inertia (Elbow Method — Lower is Better)
+      5. Subsampling Stability ARI (Higher is Better)
+    Safely overwrites any existing file.
     """
     algorithms = performance_df["algorithm"].unique()
     tables = performance_df["distance_table"].unique()
 
-    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
+    fig, axes = plt.subplots(2, 3, figsize=(19, 10.5))
 
     algo_styles = {
         "pam": {"marker": "o", "linestyle": "-", "name": "PAM (k-medoids++)"},
@@ -616,8 +635,8 @@ def plot_clustering_evaluation_profiles(
     palette = ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02"]
     table_colors = {t: palette[i % len(palette)] for i, t in enumerate(tables)}
 
-    # Panel 1: Silhouette Score (Higher is Better)
-    ax1 = axes[0]
+    # Row 1, Col 0: Panel 1 - Silhouette Score (Higher is Better)
+    ax1 = axes[0, 0]
     for algo in algorithms:
         style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
         for tbl in tables:
@@ -633,29 +652,48 @@ def plot_clustering_evaluation_profiles(
     ax1.set_ylabel("Mean Silhouette Coefficient", fontsize=10)
     ax1.set_xticks(performance_df["k"].unique())
     ax1.grid(True, linestyle="--", alpha=0.4)
-    ax1.legend(fontsize=8, loc="upper right")
+    ax1.legend(fontsize=8, loc="lower right")
 
-    # Panel 2: Total Inertia (Elbow Method — Lower is Better)
-    ax2 = axes[1]
+    # Row 1, Col 1: Panel 2 - Davies-Bouldin Index (Lower is Better)
+    ax2 = axes[0, 1]
     for algo in algorithms:
         style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
         for tbl in tables:
             sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
-            if len(sub) == 0:
+            if len(sub) == 0 or sub["davies_bouldin_mds"].isna().all():
                 continue
             color = table_colors[tbl]
             lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
-            ax2.plot(sub["k"], sub["inertia"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
+            ax2.plot(sub["k"], sub["davies_bouldin_mds"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
 
-    ax2.set_title("B. Total Cluster Inertia (Elbow Method)\n(Sum of Distances to Medoids — Lower is Better)", fontsize=11, fontweight="bold")
+    ax2.set_title("B. Davies-Bouldin Index (10D MDS)\n(Lower is Better)", fontsize=11, fontweight="bold")
     ax2.set_xlabel("Number of Clusters (k)", fontsize=10)
-    ax2.set_ylabel("Inertia", fontsize=10)
+    ax2.set_ylabel("Davies-Bouldin Index", fontsize=10)
     ax2.set_xticks(performance_df["k"].unique())
     ax2.grid(True, linestyle="--", alpha=0.4)
     ax2.legend(fontsize=8, loc="upper right")
 
-    # Panel 3: Stability ARI (Higher is Better)
-    ax3 = axes[2]
+    # Row 1, Col 2: Panel 3 - Calinski-Harabasz Index (Higher is Better)
+    ax3 = axes[0, 2]
+    for algo in algorithms:
+        style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
+        for tbl in tables:
+            sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
+            if len(sub) == 0 or sub["calinski_harabasz_mds"].isna().all():
+                continue
+            color = table_colors[tbl]
+            lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
+            ax3.plot(sub["k"], sub["calinski_harabasz_mds"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
+
+    ax3.set_title("C. Calinski-Harabasz Index (10D MDS)\n(Higher is Better)", fontsize=11, fontweight="bold")
+    ax3.set_xlabel("Number of Clusters (k)", fontsize=10)
+    ax3.set_ylabel("Calinski-Harabasz Score", fontsize=10)
+    ax3.set_xticks(performance_df["k"].unique())
+    ax3.grid(True, linestyle="--", alpha=0.4)
+    ax3.legend(fontsize=8, loc="upper right")
+
+    # Row 2, Col 0: Panel 4 - Total Cluster Inertia (Elbow Method — Lower is Better)
+    ax4 = axes[1, 0]
     for algo in algorithms:
         style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
         for tbl in tables:
@@ -664,7 +702,26 @@ def plot_clustering_evaluation_profiles(
                 continue
             color = table_colors[tbl]
             lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
-            ax3.errorbar(
+            ax4.plot(sub["k"], sub["inertia"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
+
+    ax4.set_title("D. Total Cluster Inertia (Elbow Method)\n(Sum of Distances to Medoids — Lower is Better)", fontsize=11, fontweight="bold")
+    ax4.set_xlabel("Number of Clusters (k)", fontsize=10)
+    ax4.set_ylabel("Inertia", fontsize=10)
+    ax4.set_xticks(performance_df["k"].unique())
+    ax4.grid(True, linestyle="--", alpha=0.4)
+    ax4.legend(fontsize=8, loc="upper right")
+
+    # Row 2, Col 1: Panel 5 - Subsampling Stability ARI (Higher is Better)
+    ax5 = axes[1, 1]
+    for algo in algorithms:
+        style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
+        for tbl in tables:
+            sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
+            if len(sub) == 0:
+                continue
+            color = table_colors[tbl]
+            lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
+            ax5.errorbar(
                 sub["k"],
                 sub["stability_ari_mean"],
                 yerr=sub["stability_ari_std"],
@@ -676,30 +733,55 @@ def plot_clustering_evaluation_profiles(
                 alpha=0.85,
             )
 
-    ax3.axhline(0.75, color="red", linestyle=":", linewidth=1.5, label="High Stability Threshold (0.75)")
-    ax3.set_title("C. Subsampling Stability (Adjusted Rand Index)\n(80% Subsampling Without Replacement — 100 Iterations)", fontsize=11, fontweight="bold")
-    ax3.set_xlabel("Number of Clusters (k)", fontsize=10)
-    ax3.set_ylabel("Mean Adjusted Rand Index (ARI)", fontsize=10)
-    ax3.set_xticks(performance_df["k"].unique())
-    ax3.grid(True, linestyle="--", alpha=0.4)
-    ax3.legend(fontsize=8, loc="lower left")
+    ax5.axhline(0.75, color="red", linestyle=":", linewidth=1.5, label="High Stability Threshold (0.75)")
+    ax5.set_title("E. Subsampling Stability (Adjusted Rand Index)\n(80% Subsampling Without Replacement — 100 Iterations)", fontsize=11, fontweight="bold")
+    ax5.set_xlabel("Number of Clusters (k)", fontsize=10)
+    ax5.set_ylabel("Mean Adjusted Rand Index (ARI)", fontsize=10)
+    ax5.set_xticks(performance_df["k"].unique())
+    ax5.grid(True, linestyle="--", alpha=0.4)
+    ax5.legend(fontsize=8, loc="lower right")
 
-    plt.suptitle("Multi-Algorithm Cluster Validity & Stability Comparison", fontsize=13, y=1.02)
+    # Row 2, Col 2: Panel 6 - Consolidated Legend Box
+    axes[1, 2].axis("off")
+    h1, l1 = ax1.get_legend_handles_labels()
+    h5, l5 = ax5.get_legend_handles_labels()
+    by_label = dict(zip(l1 + l5, h1 + h5))
+    if by_label:
+        axes[1, 2].legend(
+            by_label.values(),
+            by_label.keys(),
+            loc="center",
+            title="Algorithm & Distance Table",
+            title_fontsize=10,
+            fontsize=8.5,
+            frameon=True,
+            facecolor="#fdfdfd",
+            edgecolor="#d0d0d0",
+        )
+
+    plt.suptitle("Multi-Algorithm Cluster Validity & Stability Comparison", fontsize=14, y=0.99)
     plt.tight_layout()
 
     if save_path:
         os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        print(f"[Plotting] Comparative evaluation figure saved to: {save_path}")
+        if os.path.exists(save_path):
+            try:
+                os.chmod(save_path, 0o777)
+                os.remove(save_path)
+            except Exception:
+                pass
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"[Plotting] Comparative evaluation figure saved (overwriting existing) to: {save_path}")
 
+    # Display in Jupyter notebook if interactive, then safely release figure resources
     try:
         from IPython import get_ipython
         if get_ipython() is not None:
             plt.show()
-        else:
-            plt.close()
     except Exception:
-        plt.close()
+        pass
+    finally:
+        plt.close(fig)
 
 
 # =============================================================================
@@ -711,8 +793,7 @@ def save_clustering_results_to_sqlite(
     input_db_path: str,
     output_db_path: str,
     performance_table: str = DEFAULT_PERFORMANCE_TABLE,
-    labels_table: str = DEFAULT_LABELS_TABLE,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    labels_table: str = DEFAULT_LABELS_TABLE,) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Saves unified performance scores and patient cluster labels into SQLite.
     """
@@ -759,12 +840,12 @@ def save_clustering_results_to_sqlite(
                 lambda rid: 1 if rid in medoid_ids else 0
             )
 
-    with sqlite3.connect(output_db_path) as conn:
+    with sqlite3.connect(input_db_path) as conn:
         performance_df.to_sql(performance_table, conn, if_exists="replace", index=False)
         labels_df.to_sql(labels_table, conn, if_exists="replace", index=False)
 
-    print(f"[Persistence] Saved '{performance_table}' ({len(performance_df)} rows) into '{output_db_path}'.")
-    print(f"[Persistence] Saved '{labels_table}' ({len(labels_df)} patients, {len(labels_df.columns)} columns) into '{output_db_path}'.")
+    print(f"[Persistence] Saved '{performance_table}' ({len(performance_df)} rows) into '{input_db_path}'.")
+    print(f"[Persistence] Saved '{labels_table}' ({len(labels_df)} patients, {len(labels_df.columns)} columns) into '{input_db_path}'.")
 
     return performance_df, labels_df
 
@@ -780,6 +861,7 @@ def run_clustering_pipeline(
     algorithms: Optional[List[str]] = None,
     k_range: List[int] = DEFAULT_K_RANGE,
     n_pam_runs: int = DEFAULT_PAM_RUNS,
+    random_state: int = DEFAULT_RANDOM_STATE,
     n_subsamples: int = DEFAULT_N_SUBSAMPLES,
     plot_dendrograms: bool = True,
     output_dir: Optional[str] = None,
@@ -809,6 +891,8 @@ def run_clustering_pipeline(
         Range of clusters to evaluate (default: 2 to 8).
     n_pam_runs : int
         Number of random initializations for PAM multi-start (default: 10).
+    random_state : int
+        Master random seed root for PAM multi-start and subsampling stability (default: 42).
     n_subsamples : int
         Number of subsampling stability iterations (default: 100).
     plot_dendrograms : bool
@@ -883,15 +967,31 @@ def run_clustering_pipeline(
         n_patients = len(medical_record_ids)
 
         # 2. Plot Dendrograms if hierarchical algorithms are requested
-        has_hierarchical = any("hclust" in a for a in algorithms)
-        if plot_dendrograms and has_hierarchical:
-            print(f"[Dendrogram] Plotting hierarchical cophenetic tree for '{tbl_name}'...")
-            plot_hierarchical_dendrograms(dist_matrix, tbl_name, output_dir=output_dir, k_cutoff=6)
+        # Plots separate standalone dendrograms only for the linkages present in algorithms
+        if plot_dendrograms:
+            if "hclust_complete" in algorithms:
+                print(f"[Dendrogram] Plotting Complete Linkage dendrogram for '{tbl_name}'...")
+                plot_single_hierarchical_dendrogram(
+                    dist_matrix=dist_matrix,
+                    table_name=tbl_name,
+                    linkage_method="complete",
+                    output_dir=output_dir,
+                    k_cutoff=6,
+                )
+            if "hclust_average" in algorithms:
+                print(f"[Dendrogram] Plotting Average Linkage dendrogram for '{tbl_name}'...")
+                plot_single_hierarchical_dendrogram(
+                    dist_matrix=dist_matrix,
+                    table_name=tbl_name,
+                    linkage_method="average",
+                    output_dir=output_dir,
+                    k_cutoff=6,
+                )
 
         # 3. Precompute 10D MDS coordinates once per distance matrix for auxiliary metrics
         print(f"[MDS Coordinates] Fitting 10D Metric MDS for auxiliary metrics...")
         try:
-            mds = MDS(n_components=min(10, n_patients - 1), dissimilarity="precomputed", random_state=42, n_init=4)
+            mds = MDS(n_components=min(10, n_patients - 1), dissimilarity="precomputed", random_state=random_state, n_init=4)
             mds_coords = mds.fit_transform(dist_matrix)
         except Exception as e:
             print(f"[Warning] MDS embedding failed ({e}). Proceeding without auxiliary coordinate metrics.")
@@ -912,7 +1012,9 @@ def run_clustering_pipeline(
             for k in k_range:
                 print(f"  Fitting k={k}...")
                 if algo_key == "pam":
-                    labels, medoids, inertia, best_seed = fit_fn(dist_matrix, k, n_runs=n_pam_runs)
+                    labels, medoids, inertia, best_seed = fit_fn(
+                        dist_matrix, k, n_runs=n_pam_runs, random_state=random_state
+                    )
                 else:
                     labels, medoids, inertia, best_seed = fit_fn(dist_matrix, k)
 
@@ -927,6 +1029,7 @@ def run_clustering_pipeline(
                     k=k,
                     n_subsamples=n_subsamples,
                     subsample_ratio=DEFAULT_SUBSAMPLE_RATIO,
+                    random_state=random_state,
                     n_jobs=n_jobs,
                 )
 
@@ -1004,6 +1107,7 @@ if __name__ == "__main__":
         algorithms=["pam", "hclust_complete", "hclust_average"],
         k_range=list(range(2, 9)),
         n_pam_runs=10,
+        random_state=42,
         n_subsamples=100,
         output_dir=out_dir,
         n_jobs=-1,

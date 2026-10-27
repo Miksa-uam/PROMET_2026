@@ -60,7 +60,7 @@ Methodological & Theoretical Justification:
    - 0.67 / 0.33 (Proportional to variable count: 12 WGC vs 6 EB variables, 2/3 vs 1/3)
    - 0.70 / 0.30 (High etiological prioritization)
 
-Author: Clinical Data Science Pair Programmer
+Author: Gemini 3.8 Flash High in Antigravity
 Date: October 2026
 Target Environment: Python 3.10+ / SQLite3 / NumPy / SciPy / Pandas
 ================================================================================
@@ -157,8 +157,7 @@ HYBRID_CONFIGURATIONS: Dict[str, Dict[str, any]] = {
 
 def load_cohort_clustering_data(
     db_path: str,
-    table_name: str = "timetoevent_eb_wgc_compl",
-) -> pd.DataFrame:
+    table_name: str = "timetoevent_eb_wgc_compl",) -> pd.DataFrame:
     """
     Loads clustering cohort data from SQLite and rigorously verifies schema integrity.
 
@@ -250,8 +249,7 @@ def load_cohort_clustering_data(
 
 def compute_wgc_jaccard_distance(
     df: pd.DataFrame,
-    wgc_cols: Optional[List[str]] = None,
-) -> np.ndarray:
+    wgc_cols: Optional[List[str]] = None,) -> np.ndarray:
     """
     Computes pairwise Jaccard distance matrix for the 12 Weight Gain Cause variables.
 
@@ -331,8 +329,7 @@ def compute_eb_gower_distance(
     df: pd.DataFrame,
     binary_cols: Optional[List[str]] = None,
     ordinal_cols: Optional[List[str]] = None,
-    likert_range: float = LIKERT_THEORETICAL_RANGE,
-) -> np.ndarray:
+    likert_range: float = LIKERT_THEORETICAL_RANGE,) -> np.ndarray:
     """
     Computes pairwise Gower distance matrix on the 6 Eating Behavior variables.
 
@@ -413,8 +410,7 @@ def compute_hybrid_distance(
     wgc_dist: np.ndarray,
     eb_dist: np.ndarray,
     wgc_weight: float,
-    eb_weight: float,
-) -> np.ndarray:
+    eb_weight: float,) -> np.ndarray:
     """
     Combines WGC Jaccard and EB Gower distance matrices according to specified block weights.
 
@@ -462,8 +458,7 @@ def save_distance_matrix_to_sqlite(
     dist_matrix: np.ndarray,
     medical_record_ids: List[str],
     db_path: str,
-    table_name: str,
-) -> pd.DataFrame:
+    table_name: str,) -> pd.DataFrame:
     """
     Persists an N x N distance matrix to SQLite with standard patient indexing.
 
@@ -516,8 +511,7 @@ def save_distance_matrix_to_sqlite(
 
 def load_hybrid_matrix_from_sqlite(
     db_path: str,
-    table_name: str,
-) -> Tuple[np.ndarray, List[str], pd.Series]:
+    table_name: str,) -> Tuple[np.ndarray, List[str], pd.Series]:
     """
     Loads a saved distance matrix from SQLite.
 
@@ -559,8 +553,7 @@ def run_hybrid_matrix_pipeline(
     source_table_name: str = "timetoevent_eb_wgc_compl",
     configs: Optional[Dict[str, Dict[str, any]]] = None,
     save_component_matrices: bool = True,
-    matrix_destination_db: Optional[str] = None,
-) -> Dict[str, Dict]:
+    matrix_destination_db: Optional[str] = None,) -> Dict[str, Dict]:
     """
     Executes the revised hybrid distance preparation pipeline across all 4 sensitivity configurations.
     Conventionally persists distance matrices directly into the input database (input_db_path)
