@@ -366,8 +366,8 @@ def _plot_trajectory_panel(
         ax.plot(
             grp["days_from_baseline"],
             grp[body_weight_col],
-            alpha=0.15,
-            linewidth=0.6,
+            alpha=0.35,
+            linewidth=1.0,
             color=color if color != "red" else NEUTRAL_GRAY,
         )
 
@@ -413,21 +413,21 @@ def _plot_trajectory_panel(
         x_dashed, y_dashed = smoothed[:, 0][mask_dashed], smoothed[:, 1][mask_dashed]
         sem_dashed = sem_smooth_full[mask_dashed]
 
-        # Draw solid line with 95% CI
-        line_color = "red" if color == "red" else "black"
-        ax.plot(x_solid, y_solid, color=line_color, linewidth=2.5, label="Smoothed Mean")
+        # Draw solid line with 95% CI using cluster-specific color
+        line_color = color
+        ax.plot(x_solid, y_solid, color=line_color, linewidth=2.8, label="Smoothed Mean")
         ax.fill_between(
             x_solid,
             y_solid - 1.96 * sem_solid,
             y_solid + 1.96 * sem_solid,
             color=line_color,
-            alpha=0.2,
+            alpha=0.25,
             label="95% CI",
         )
 
         # Draw dashed line beyond mean follow-up
         if len(x_dashed) > 0:
-            ax.plot(x_dashed, y_dashed, color=line_color, linewidth=2.5, linestyle="--")
+            ax.plot(x_dashed, y_dashed, color=line_color, linewidth=2.8, linestyle="--")
             ax.fill_between(
                 x_dashed,
                 y_dashed - 1.96 * sem_dashed,
@@ -617,6 +617,150 @@ def plot_cluster_spaghetti(
 
 
 # =============================================================================
+# PART 1B: CLUSTER-BASED NADIR & WEIGHT REGAIN ANALYSIS
+# =============================================================================
+
+def compute_nadir_weight_loss_metrics(
+    trajectory_df: pd.DataFrame,
+    cluster_col: str = "cluster_id",
+    patient_id_col: str = "patient_id",
+    medical_record_id_col: str = "medical_record_id",
+    body_weight_col: str = "weight_kg",
+    days_col: str = "days_from_baseline",
+    cluster_config_path: Optional[Union[str, Dict]] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Computes patient-level nadir and weight regain metrics and performs a statistical
+    comparison across behavioral phenotype clusters.
+
+    Scientific Task & Clinical Rationale:
+    -------------------------------------
+    Weight loss trajectories in clinical cohorts generally exhibit three dynamic phases:
+      1. Maximum Weight Loss (%): Initial baseline to lowest achieved body weight (nadir).
+         Formula: ((W_nadir - W_baseline) / W_baseline) * 100
+      2. Weight Regain (%): Percentage weight recidivism from nadir to final follow-up.
+         Formula: ((W_final - W_nadir) / W_nadir) * 100
+      3. Total Weight Loss (%): Overall net change from baseline to final follow-up.
+         Formula: ((W_final - W_baseline) / W_baseline) * 100
+
+    This function tests between-cluster differences using:
+      - One-way ANOVA (parametric F-test for differences in cluster means)
+      - Kruskal-Wallis test (non-parametric rank-sum test for differences in cluster medians)
+
+    Parameters:
+    -----------
+    trajectory_df : pd.DataFrame
+        Longitudinal measurements containing patient identifiers, cluster assignments,
+        days from baseline, and body weight.
+    cluster_col : str
+        Column containing cluster labels (default: 'cluster_id').
+    patient_id_col : str
+        Patient identifier column.
+    medical_record_id_col : str
+        Medical record identifier column.
+    body_weight_col : str
+        Body weight in kg column.
+    days_col : str
+        Days from baseline column.
+    cluster_config_path : Optional[Union[str, Dict]]
+        Path or dictionary mapping cluster IDs to names/colors.
+
+    Returns:
+    --------
+    Tuple[pd.DataFrame, pd.DataFrame]:
+        - summary_df: Consolidated comparison table across clusters with p-values.
+        - patient_df: Patient-level dataset containing computed nadir and regain metrics.
+    """
+    cluster_config = load_cluster_config(cluster_config_path)
+
+    # 1. Sort observations chronologically per patient
+    sorted_df = trajectory_df.sort_values(
+        [patient_id_col, medical_record_id_col, days_col]
+    )
+
+    # 2. Extract baseline, nadir, and final weights per patient
+    patient_records = []
+    for (pid, mid), grp in sorted_df.groupby([patient_id_col, medical_record_id_col]):
+        cid = grp[cluster_col].iloc[0]
+        w_bl = grp[body_weight_col].iloc[0]
+        w_nadir = grp[body_weight_col].min()
+        w_final = grp[body_weight_col].iloc[-1]
+
+        max_wl = ((w_nadir - w_bl) / w_bl) * 100.0 if w_bl > 0 else np.nan
+        regain = ((w_final - w_nadir) / w_nadir) * 100.0 if w_nadir > 0 else np.nan
+        total_wl = ((w_final - w_bl) / w_bl) * 100.0 if w_bl > 0 else np.nan
+
+        patient_records.append({
+            patient_id_col: pid,
+            medical_record_id_col: mid,
+            cluster_col: cid,
+            "max_wl_%": max_wl,
+            "regain_%": regain,
+            "total_wl_%": total_wl,
+        })
+
+    patient_df = pd.DataFrame(patient_records)
+    clusters = sorted(patient_df[cluster_col].unique())
+
+    metrics_meta = [
+        {"id": "max_wl_%", "name": "Max Weight Loss (%) [Baseline to Nadir]"},
+        {"id": "regain_%", "name": "Weight Regain (%) [Nadir to Final]"},
+        {"id": "total_wl_%", "name": "Total Weight Loss (%) [Baseline to Final]"},
+    ]
+
+    summary_rows = []
+    for m in metrics_meta:
+        m_id = m["id"]
+        row: Dict[str, Any] = {"Metric": m["name"]}
+
+        # Whole population summary
+        pop_vals = patient_df[m_id].dropna()
+        row["Whole Population"] = f"{pop_vals.mean():+.2f}% (+/-{pop_vals.std():.2f}%)"
+
+        # Per-cluster summary
+        cluster_groups = []
+        for cid in clusters:
+            c_label = get_cluster_label(cid, cluster_config)
+            c_vals = patient_df.loc[patient_df[cluster_col] == cid, m_id].dropna()
+            cluster_groups.append(c_vals.values)
+            row[f"{c_label} (n={len(c_vals)})"] = f"{c_vals.mean():+.2f}% (+/-{c_vals.std():.2f}%)"
+
+        # Statistical tests across clusters
+        valid_groups = [g for g in cluster_groups if len(g) > 0]
+        if len(valid_groups) > 1:
+            try:
+                f_stat, f_p = stats.f_oneway(*valid_groups)
+                kw_stat, kw_p = stats.kruskal(*valid_groups)
+                row["ANOVA p-val"] = f"{f_p:.4f}"
+                row["Kruskal p-val"] = f"{kw_p:.4f}"
+            except Exception:
+                row["ANOVA p-val"] = "N/A"
+                row["Kruskal p-val"] = "N/A"
+        else:
+            row["ANOVA p-val"] = "N/A"
+            row["Kruskal p-val"] = "N/A"
+
+        summary_rows.append(row)
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    # 3. Print clean diagnostics summary table
+    print("\n" + "=" * 80)
+    print("CLUSTER-BASED NADIR & WEIGHT REGAIN STATISTICAL COMPARISON")
+    print("=" * 80)
+    print(f"Cohort Size:        {len(patient_df)} patients across {len(clusters)} clusters")
+    print("Metrics Evaluated:  Max Weight Loss (%), Weight Regain (%), Total Weight Loss (%)")
+    print("Statistical Tests:  One-way ANOVA (F-test) & Kruskal-Wallis (H-test)")
+    print("=" * 80)
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.width", 1000)
+    print(summary_df.to_string(index=False))
+    print("=" * 80 + "\n")
+
+    return summary_df, patient_df
+
+
+# =============================================================================
 # PART 2: LINEAR MIXED-EFFECTS MODEL (LMM) FOR TRAJECTORY ESTIMATION
 # =============================================================================
 
@@ -625,7 +769,7 @@ def fit_trajectory_mixed_model(
     use_deviation_coding: bool = True,
     reference_cluster: int = 0,
     adjust_for_covariates: bool = False,
-    time_degree: int = 3,
+    time_degree: int = 2,
     patient_id_col: str = "patient_id",
     medical_record_id_col: str = "medical_record_id",
     body_weight_col: str = "weight_kg",
@@ -634,7 +778,7 @@ def fit_trajectory_mixed_model(
     Fits a Linear Mixed-Effects Model (LMM) with non-linear spline time curves and random effects.
 
     Model Formula:
-      weight_kg ~ cluster_term * bs(days_from_baseline, knots, degree=3) [+ age + C(sex_f) + baseline_bmi]
+      weight_kg ~ cluster_term * bs(days_from_baseline, df=3, degree=2) [+ age + C(sex_f) + baseline_bmi]
       Random effects: ~days_from_baseline grouped by medical_record_id (patient level).
 
     Parameters:
@@ -649,7 +793,8 @@ def fit_trajectory_mixed_model(
     adjust_for_covariates : bool
         Whether to adjust for age, sex_f, and baseline_bmi.
     time_degree : int
-        Polynomial degree for the time spline (default: 3).
+        Polynomial degree for the time spline (default: 2, quadratic B-spline).
+        Degree=2 with df=3 prevents runaway cubic tail extrapolations in sparse dropout clusters.
 
     Returns:
     --------
@@ -659,10 +804,16 @@ def fit_trajectory_mixed_model(
     df_model = trajectory_df.copy()
     df_model["cluster_id"] = pd.Categorical(df_model["cluster_id"])
 
-    # Spline knots at 25th, 50th, 75th percentiles of unique follow-up days
-    unique_days = df_model["days_from_baseline"].unique()
-    knots = np.quantile(unique_days, [0.25, 0.5, 0.75])
-    time_spline = f"patsy.bs(days_from_baseline, knots={tuple(knots)}, degree={time_degree})"
+    # Spline time curves:
+    # In clinical cohorts with substantial attrition, cubic splines (degree=3) can extrapolate
+    # violently in sparse clusters beyond the knot boundary. Quadratic B-splines (degree=2, df=3)
+    # capture rapid early weight loss, nadir, and stabilization while maintaining numerical stability.
+    if time_degree == 2:
+        time_spline = f"patsy.bs(days_from_baseline, df=3, degree={time_degree})"
+    else:
+        unique_days = df_model["days_from_baseline"].unique()
+        knots = np.quantile(unique_days, [0.25, 0.5, 0.75])
+        time_spline = f"patsy.bs(days_from_baseline, knots={tuple(knots)}, degree={time_degree})"
 
     if use_deviation_coding:
         coding_str = "Deviation Coding (contrasts vs. Grand Mean)"
@@ -798,7 +949,17 @@ def plot_lmm_predicted_trajectories(
         c_label = get_cluster_label(cid, cluster_config)
         c_color = get_cluster_color(cid, cluster_config)
 
-        ax.plot(time_grid, preds, color=c_color, linewidth=3.0, label=c_label)
+        # Length-adjusted trajectory styling:
+        # Solid curve across observed follow-up window; dashed curve for model extrapolation
+        c_max_day = float(df_model.loc[df_model["cluster_id"].astype(str) == str(cid), "days_from_baseline"].max())
+        pred_vals = np.asarray(preds)
+
+        obs_mask = time_grid <= c_max_day
+        ax.plot(time_grid[obs_mask], pred_vals[obs_mask], color=c_color, linewidth=2.8, label=c_label)
+
+        ext_mask = time_grid >= c_max_day
+        if np.sum(ext_mask) > 1:
+            ax.plot(time_grid[ext_mask], pred_vals[ext_mask], color=c_color, linewidth=1.8, linestyle="--", alpha=0.7)
 
     ax.set_title(
         f"LMM-Predicted Weight Trajectories by Cluster {title_suffix}".strip(),
@@ -910,7 +1071,8 @@ def fit_outcome_regressions(
         if adjust_for_covariates:
             clean_sub = clean_sub.dropna(subset=["age", "sex_f", "baseline_bmi"])
 
-        formula = f"`{v}` ~ C(cluster_cat){cov_str}"
+        # Patsy formula with Q() syntax to handle variables with %, digits, or special characters
+        formula = f"Q('{v}') ~ C(cluster_cat){cov_str}"
         row: Dict[str, Any] = {
             "Outcome": spec["name"],
             "Outcome_Variable": v,
@@ -1167,6 +1329,7 @@ def run_cluster_modeling_pipeline(
     cutoff_days: int = 365,
     reference_cluster: int = 0,
     adjust_for_covariates: bool = False,
+    time_degree: int = 2,
     cluster_config_path: Optional[Union[str, Dict]] = None,
     save_to_db: bool = True,
 ) -> Dict[str, Any]:
@@ -1252,11 +1415,19 @@ def run_cluster_modeling_pipeline(
         title_suffix=f"({cutoff_days}-Day Cutoff)",
     )
 
+    # 2b. Cluster-Based Nadir & Weight Regain Metrics Comparison
+    nadir_summary_df, patient_nadir_df = compute_nadir_weight_loss_metrics(
+        trajectory_df=trajectory_df,
+        cluster_col="cluster_id",
+        cluster_config_path=cluster_config_path,
+    )
+
     # 3. Linear Mixed-Effects Model (LMM)
     lmm_result, df_model = fit_trajectory_mixed_model(
         trajectory_df=trajectory_df,
         use_deviation_coding=True,
         adjust_for_covariates=adjust_for_covariates,
+        time_degree=time_degree,
     )
 
     fig_lmm = plot_lmm_predicted_trajectories(
@@ -1305,6 +1476,8 @@ def run_cluster_modeling_pipeline(
         "trajectory_df": trajectory_df,
         "cohort_df": cohort_df,
         "lmm_result": lmm_result,
+        "nadir_metrics_df": nadir_summary_df,
+        "patient_nadir_df": patient_nadir_df,
         "regression_results_df": reg_df,
         "km_summary_df": km_summary_df,
         "figures": {

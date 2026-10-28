@@ -6,7 +6,7 @@ CLUSTER_PROJECTIONS.PY
 Research Context & Scientific Task:
 -----------------------------------
 This module provides 2D geometric ordination and dimensionality reduction
-visualizations for behavioral obesity phenotypes (Paper #1).
+visualizations for behavioral obesity phenotype clusters (Paper #1).
 
 Because patients were clustered using a non-Euclidean hybrid dissimilarity
 matrix (Jaccard distance for 12 asymmetric binary Weight Gain Causes + Gower
@@ -24,13 +24,43 @@ This module operates directly on the precomputed hybrid pairwise distance matrix
    - Uses UMAP with metric='precomputed' (with automatic fallback to precomputed t-SNE
      if umap-learn is not installed).
 
+Pseudocode: 
+-----------
+PIPELINE run_cluster_projection_pipeline(source_db, labels_db, distance_config, algorithm, k, output_dir, ...):
+    1. LOAD DATA:
+       - Query distance matrix from SQLite: "hybrid_{distance_config}" (308 x 308 symmetric array)
+       - Query cluster labels from "jaccard_gower_cluster_labels" aligned by medical_record_id
+       - Extract exemplar medoid IDs if algorithm == 'pam'
+
+    2. METRIC PCoA / MDS ORDINATION:
+       - Double-centering of squared distance matrix: B = -0.5 * H * (D^2) * H
+       - Eigen-decomposition of B -> extract eigenvalues and eigenvectors
+       - Calculate percentage of total positive variance explained by Axis 1 and Axis 2
+       - Scale coordinates: X = V * sqrt(Lambda)
+       - Render 2D scatter plot:
+         * Color points by cluster (using cluster_config_path if provided)
+         * Mark cluster centroids with 'X'
+         * Highlight exemplar medoids with star symbols (★) if present
+         * Title: Explained Variance (% on Axis 1, % on Axis 2)
+       - Save publication figure (300 DPI PNG)
+
+    3. NON-LINEAR MANIFOLD EMBEDDING (UMAP / t-SNE):
+       - If umap-learn is available: run UMAP(metric='precomputed', n_neighbors=15, min_dist=0.2)
+       - If umap-learn is absent: fall back gracefully to TSNE(metric='precomputed', perplexity=30)
+       - Render 2D scatter plot colored by cluster with medoids highlighted
+       - Save publication figure (300 DPI PNG)
+
+    4. SAVE PROJECTION COORDINATES:
+       - If save_to_db=True: persist [medical_record_id, cluster_id, pcoa_dim1, pcoa_dim2, ...] to SQLite
+       - Return (projection_df, figures_dict)
+
 I/O and Frontend Architecture:
 ------------------------------
 Adheres strictly to the decoupled parameter interface of cluster_comparisons.py,
 allowing seamless execution from notebook cells with direct export to project output folders.
 
-Author: Clinical Bioinformatician & Data Science Pair Programmer
-Date: October 2026
+Author: Gemini 3.8 Flash High in Antigravity
+Revised: 28Oct26
 Target Environment: Python 3.10+ / SQLite3 / Pandas / NumPy / Scikit-learn / Matplotlib / Seaborn
 ================================================================================
 """
@@ -146,8 +176,7 @@ def resolve_cluster_column_name(
     weight: str = "wgc07_eb03",
     algorithm: str = "pam",
     k: int = 7,
-    available_columns: Optional[List[str]] = None,
-) -> str:
+    available_columns: Optional[List[str]] = None,) -> str:
     """Constructs or resolves the canonical cluster column name in labels table."""
     clean_weight = weight.replace("hybrid_", "")
     algo_key = "pam" if "pam" in algorithm.lower() else "hclust_complete"
@@ -171,8 +200,7 @@ def load_cluster_and_distance_data(
     k: int = 7,
     cluster_table: str = "jaccard_gower_cluster_labels",
     distance_table: Optional[str] = None,
-    medical_record_id_col: str = "medical_record_id",
-) -> Tuple[np.ndarray, pd.Series, List[str], Optional[List[str]]]:
+    medical_record_id_col: str = "medical_record_id",) -> Tuple[np.ndarray, pd.Series, List[str], Optional[List[str]]]:
     """
     Loads pairwise distance matrix and aligned cluster labels from SQLite.
 
@@ -267,8 +295,7 @@ def load_cluster_and_distance_data(
 # =============================================================================
 
 def compute_pcoa_coordinates(
-    dist_matrix: np.ndarray,
-) -> Tuple[np.ndarray, float, float]:
+    dist_matrix: np.ndarray,) -> Tuple[np.ndarray, float, float]:
     """
     Computes exact classical Principal Coordinate Analysis (PCoA / Metric MDS)
     via Gower's double-centering matrix decomposition.
@@ -331,8 +358,7 @@ def plot_cluster_pcoa(
     output_filepath: Optional[str] = None,
     cluster_config_path: Optional[Union[str, Dict]] = None,
     title_suffix: str = "",
-    figsize: Tuple[int, int] = (10, 8),
-) -> plt.Figure:
+    figsize: Tuple[int, int] = (10, 8),) -> plt.Figure:
     """
     Renders publication-ready 2D PCoA (Metric MDS) scatter plot colored by cluster.
 
@@ -438,8 +464,7 @@ def plot_cluster_pcoa(
 
 def compute_manifold_coordinates(
     dist_matrix: np.ndarray,
-    random_state: int = 42,
-) -> Tuple[np.ndarray, str]:
+    random_state: int = 42,) -> Tuple[np.ndarray, str]:
     """
     Computes 2D non-linear manifold coordinates directly from precomputed distance matrix.
     Uses UMAP if installed; gracefully falls back to precomputed t-SNE if umap-learn is absent.
@@ -492,8 +517,7 @@ def plot_cluster_manifold(
     output_filepath: Optional[str] = None,
     cluster_config_path: Optional[Union[str, Dict]] = None,
     title_suffix: str = "",
-    figsize: Tuple[int, int] = (10, 8),
-) -> plt.Figure:
+    figsize: Tuple[int, int] = (10, 8),) -> plt.Figure:
     """
     Renders publication-ready 2D non-linear manifold (UMAP / t-SNE) scatter plot.
 
@@ -604,8 +628,7 @@ def run_cluster_projection_pipeline(
     db_table_name: Optional[str] = None,
     cluster_config_path: Optional[Union[str, Dict]] = None,
     generate_pcoa: bool = True,
-    generate_umap: bool = True,
-) -> Tuple[pd.DataFrame, Dict[str, plt.Figure]]:
+    generate_umap: bool = True,) -> Tuple[pd.DataFrame, Dict[str, plt.Figure]]:
     """
     End-to-end execution pipeline conducting 2D geometric ordination and manifold projections:
     1. Loads hybrid distance matrix and aligned cluster assignments.

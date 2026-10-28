@@ -73,7 +73,7 @@ Pseudocode:
 4. Generate multi-panel evaluation profile figures.
 
 Author: Gemini 3.8 Flash High in Antigravity
-Date: October 2026
+Revised: 27Oct26
 Target Environment: Python 3.10+ / SQLite3 / NumPy / SciPy / scikit-learn / joblib / matplotlib
 ================================================================================
 """
@@ -519,10 +519,15 @@ def plot_single_hierarchical_dendrogram(
     table_name: str,
     linkage_method: str = "complete",
     output_dir: Optional[str] = None,
-    k_cutoff: int = 6,) -> None:
+    k_cutoff: Optional[int] = None,) -> None:
     """
     Generates and saves a clean, standalone hierarchical dendrogram for a single linkage method.
     Safely overwrites any existing file with the same name.
+
+    If k_cutoff is None (default), renders the dendrogram with uniform black branches and
+    no arbitrary cutoff line or cluster coloring, representing the unbiased hierarchical tree.
+    If k_cutoff is specified, highlights clusters below that cutoff with distinct colors
+    and draws a dashed horizontal cutoff line.
 
     Parameters:
     -----------
@@ -534,8 +539,8 @@ def plot_single_hierarchical_dendrogram(
         Linkage algorithm ('complete' or 'average').
     output_dir : Optional[str]
         Directory to save the resulting image file.
-    k_cutoff : int
-        Number of clusters to highlight with horizontal threshold line (default: 6).
+    k_cutoff : Optional[int]
+        Optional number of clusters to highlight with horizontal threshold line (default: None).
     """
     method_titles = {
         "complete": "Complete Linkage (Farthest Neighbor)",
@@ -546,27 +551,40 @@ def plot_single_hierarchical_dendrogram(
     condensed = squareform(dist_matrix)
     Z = linkage(condensed, method=linkage_method)
 
-    cut_step = len(Z) - k_cutoff
-    if 0 <= cut_step < len(Z):
-        cut_height = Z[cut_step, 2]
-    else:
-        cut_height = Z[-1, 2] * 0.7
-
     fig, ax = plt.subplots(figsize=(11, 6))
-    dendrogram(
-        Z,
-        ax=ax,
-        color_threshold=cut_height,
-        above_threshold_color="#555555",
-        no_labels=True,
-    )
-    ax.axhline(
-        cut_height,
-        color="#d95f02",
-        linestyle="--",
-        linewidth=1.5,
-        label=f"Cutoff Threshold (k≈{k_cutoff}, h={cut_height:.3f})",
-    )
+
+    if k_cutoff is not None and k_cutoff > 1:
+        cut_step = len(Z) - k_cutoff
+        if 0 <= cut_step < len(Z):
+            cut_height = Z[cut_step, 2]
+        else:
+            cut_height = Z[-1, 2] * 0.7
+
+        dendrogram(
+            Z,
+            ax=ax,
+            color_threshold=cut_height,
+            above_threshold_color="#555555",
+            no_labels=True,
+        )
+        ax.axhline(
+            cut_height,
+            color="#d95f02",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Cutoff Threshold (k≈{k_cutoff}, h={cut_height:.3f})",
+        )
+        ax.legend(fontsize=9, loc="upper right")
+    else:
+        # Uniform black dendrogram without arbitrary cutoff or colored clusters
+        dendrogram(
+            Z,
+            ax=ax,
+            color_threshold=0,
+            above_threshold_color="black",
+            no_labels=True,
+        )
+
     ax.set_title(
         f"Hierarchical Clustering Dendrogram: {title}\nDistance Matrix: '{table_name}'",
         fontsize=12,
@@ -575,7 +593,6 @@ def plot_single_hierarchical_dendrogram(
     ax.set_xlabel(f"Cohort Patients (N={dist_matrix.shape[0]})", fontsize=10)
     ax.set_ylabel("Cophenetic Distance", fontsize=10)
     ax.grid(True, linestyle=":", alpha=0.5)
-    ax.legend(fontsize=9, loc="upper right")
 
     plt.tight_layout()
 
@@ -864,6 +881,7 @@ def run_clustering_pipeline(
     random_state: int = DEFAULT_RANDOM_STATE,
     n_subsamples: int = DEFAULT_N_SUBSAMPLES,
     plot_dendrograms: bool = True,
+    dendrogram_k_cutoff: Optional[int] = None,
     output_dir: Optional[str] = None,
     performance_table_name: str = DEFAULT_PERFORMANCE_TABLE,
     labels_table_name: str = DEFAULT_LABELS_TABLE,
@@ -897,6 +915,8 @@ def run_clustering_pipeline(
         Number of subsampling stability iterations (default: 100).
     plot_dendrograms : bool
         Whether to generate and save hierarchical dendrograms (default: True).
+    dendrogram_k_cutoff : Optional[int]
+        Optional number of clusters to highlight in hierarchical dendrograms (default: None for uniform black).
     output_dir : Optional[str]
         Directory for saving plots (defaults to ../p1_outputs).
     performance_table_name : str
@@ -976,7 +996,7 @@ def run_clustering_pipeline(
                     table_name=tbl_name,
                     linkage_method="complete",
                     output_dir=output_dir,
-                    k_cutoff=6,
+                    k_cutoff=dendrogram_k_cutoff,
                 )
             if "hclust_average" in algorithms:
                 print(f"[Dendrogram] Plotting Average Linkage dendrogram for '{tbl_name}'...")
@@ -985,7 +1005,7 @@ def run_clustering_pipeline(
                     table_name=tbl_name,
                     linkage_method="average",
                     output_dir=output_dir,
-                    k_cutoff=6,
+                    k_cutoff=dendrogram_k_cutoff,
                 )
 
         # 3. Precompute 10D MDS coordinates once per distance matrix for auxiliary metrics

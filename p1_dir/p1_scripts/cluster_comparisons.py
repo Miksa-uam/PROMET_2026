@@ -30,7 +30,7 @@ Cluster labels and exemplar medoids are persisted in SQLite (e.g. table
 
 Descriptive & Comparative Analytical Methodology:
 -------------------------------------------------
-This module implements the rigorous translational descriptive framework:
+This module implements a descriptive framework for comparing clusters:
 1. Cluster vs. Entire Clustered Cohort Benchmark:
    - Evaluates whether each cluster deviates significantly from the overall cohort.
    - Continuous variables: Non-parametric Mann-Whitney U test.
@@ -49,8 +49,44 @@ This module implements the rigorous translational descriptive framework:
    - All database paths, table names, cluster selection parameters (weight, algorithm, k),
      variable subsets, and output paths are strictly passed from notebook calls.
 
-Author: Clinical Data Science Pair Programmer
-Date: October 2026
+Pseudocode:
+-----------
+1. RESOLUTION & INGESTION:
+   a. Ingest user configuration from notebook:
+      - Option A: Explicit weight ('wgc07_eb03'), algorithm ('pam'), and k (7).
+      - Option B: Direct cluster_column ('hybrid_wgc07_eb03_pam_k7').
+   b. Match active cluster column and medoid column in SQLite table.
+   c. Merge cluster assignments with cohort table on 'medical_record_id'.
+   d. Standardize active cluster column to 'cluster_id' (0 to k-1).
+   e. Identify and report exemplar medoid patients.
+
+2. STATISTICAL PROFILING (CLUSTER VS. ENTIRE COHORT BENCHMARK):
+   a. Compute population benchmark statistics:
+      - Continuous: Mean (+- SD) and Median [IQR].
+      - Categorical/Binary: Count N and Percentage (%).
+   b. For each cluster (0 to k-1):
+      - Continuous: Compute cluster Mean (+- SD); test vs cohort via Mann-Whitney U test.
+      - Categorical: Compute cluster count N (%); test vs cohort via Pearson Chi-square
+        with exact Fisher's test fallback if any contingency cell < 5.
+   c. Apply Benjamini-Hochberg False Discovery Rate (FDR) adjustment across comparisons.
+   d. Format two persistent SQLite tables:
+      - Detailed table: Contains raw p-values and FDR-corrected p-values.
+      - Publication table: Formats significant divergences using asterisks
+        (* p < 0.05 raw, ** p_FDR < 0.05).
+   e. Save both tables to output database (e.g. pnk_db2_p1_out_2025.sqlite).
+
+3. MULTI-VARIABLE & CLINICAL VISUALIZATIONS:
+   a. Continuous variables: Multi-cluster horizontal/split violin plots with IQR,
+      medians, and asterisks (* / **).
+   b. Categorical variables: 100% stacked bar charts showing presence/absence proportions,
+      population benchmark line, N (%) annotations, and asterisks.
+   c. Deviations from cohort mean: Lollipop plot displaying relative percentage difference (%).
+   d. Multi-attribute profiles: Heatmap with cluster-specific color scales and population reference.
+   e. Prospective outcomes: Forest plots of Risk Ratios (RR) and Risk Differences (RD) with 95% CIs.
+   f. Summary Grid: 6-panel overview of cohort demographics, BMI, follow-up, and weight loss.
+
+Author: Gemini 3.8 Flash High in Antigravity
+Revised: 28Oct26
 Target Environment: Python 3.10+ / SQLite3 / Pandas / NumPy / SciPy / Seaborn / Matplotlib
 ================================================================================
 """
@@ -100,7 +136,7 @@ NOT_ACHIEVED_COLOR = "#EC5B57"      # Coral/red for not achieved / category 0
 
 # Comprehensive clinical catalog across the 4 key evaluation domains
 DEFAULT_VARIABLE_DOMAINS: Dict[str, List[str]] = {
-    "Weight Gain Causes (12 WGC)": [
+    "Weight gain causes": [
         "womens_health_and_pregnancy",
         "mental_health",
         "family_issues",
@@ -114,7 +150,7 @@ DEFAULT_VARIABLE_DOMAINS: Dict[str, List[str]] = {
         "lifestyle_circumstances",
         "none_of_above",
     ],
-    "Eating Behaviors (6 EB)": [
+    "Eating behaviors": [
         "hunger_yn",
         "satiety_yn",
         "emotional_eating_yn",
@@ -122,16 +158,16 @@ DEFAULT_VARIABLE_DOMAINS: Dict[str, List[str]] = {
         "quantity_control_likert",
         "impulse_control_likert",
     ],
-    "Demographics & Anthropometrics": [
+    "Baseline characteristics": [
         "sex_f",
         "age",
-        "height_m",
+        # "height_m",
         "baseline_weight_kg",
         "baseline_bmi",
         "baseline_fat_%",
         "baseline_muscle_%",
     ],
-    "Prospective Clinical Outcomes & Follow-up": [
+    "Clinical outcomes": [
         "total_followup_days",
         "total_wl_%",
         "bmi_reduction",
@@ -147,10 +183,10 @@ DEFAULT_VARIABLE_DOMAINS: Dict[str, List[str]] = {
 
 # Standard default list of comparison variables
 COMPARISON_VARIABLES: List[str] = (
-    DEFAULT_VARIABLE_DOMAINS["Weight Gain Causes (12 WGC)"]
-    + DEFAULT_VARIABLE_DOMAINS["Eating Behaviors (6 EB)"]
-    + DEFAULT_VARIABLE_DOMAINS["Demographics & Anthropometrics"]
-    + DEFAULT_VARIABLE_DOMAINS["Prospective Clinical Outcomes & Follow-up"]
+    DEFAULT_VARIABLE_DOMAINS["Weight gain causes"]
+    + DEFAULT_VARIABLE_DOMAINS["Eating behaviors"]
+    + DEFAULT_VARIABLE_DOMAINS["Baseline characteristics"]
+    + DEFAULT_VARIABLE_DOMAINS["Clinical outcomes"]
 )
 
 # Comprehensive dictionary mapping raw database column names to publication-ready labels
@@ -170,40 +206,40 @@ DEFAULT_NAME_MAP: Dict[str, str] = {
     "baseline_muscle_%": "Baseline muscle mass (%)",
 
     # Eating Behaviors (3 Binary + 3 Likert)
-    "hunger_yn": "Constant hunger (y/n)",
-    "satiety_yn": "Impaired satiety (y/n)",
+    "hunger_yn": "Hunger (y/n)",
+    "satiety_yn": "Satiety (y/n)",
     "emotional_eating_yn": "Emotional eating (y/n)",
     "emotional_eating_value_likert": "Emotional eating score (1-10)",
     "quantity_control_likert": "Quantity control score (1-10)",
     "impulse_control_likert": "Impulse control score (1-10)",
 
     # 12 Weight Gain Causes (NLP Attributions)
-    "womens_health_and_pregnancy": "Women's health & pregnancy (y/n)",
-    "mental_health": "Mental health (y/n)",
-    "family_issues": "Family issues (y/n)",
-    "medication_disease_injury": "Medication, disease or injury (y/n)",
-    "physical_inactivity": "Physical inactivity (y/n)",
-    "eating_habits": "Eating habits (y/n)",
-    "schedule": "Schedule / work constraints (y/n)",
-    "smoking_cessation": "Smoking cessation (y/n)",
-    "treatment_discontinuation_or_relapse": "Prior treatment discontinuation or relapse (y/n)",
-    "pandemic": "COVID-19 pandemic (y/n)",
-    "lifestyle_circumstances": "Lifestyle / external circumstances (y/n)",
-    "none_of_above": "None of the above (idiopathic) (y/n)",
+    "womens_health_and_pregnancy": "Women's health & pregnancy",
+    "mental_health": "Mental health",
+    "family_issues": "Family issues",
+    "medication_disease_injury": "Medication, disease or injury",
+    "physical_inactivity": "Physical inactivity",
+    "eating_habits": "Eating habits",
+    "schedule": "Schedule",
+    "smoking_cessation": "Smoking cessation",
+    "treatment_discontinuation_or_relapse": "Treatment discontinuation or relapse",
+    "pandemic": "Pandemic",
+    "lifestyle_circumstances": "Lifestyle, circumstances",
+    "none_of_above": "None of the above",
 
     # Weight Loss Outcomes & Trajectories
     "total_followup_days": "Follow-up length (days)",
     "dietitian_visits": "Dietitian visits (n)",
     "nr_total_measurements": "Total measurements (n)",
     "avg_days_between_measurements": "Measurement interval (days)",
-    "last_aval_weight_kg": "Last measured weight (kg)",
+    # "last_aval_weight_kg": "Last measured weight (kg)",
     "total_wl_kg": "Total weight loss (kg)",
     "total_wl_%": "Total weight loss (%)",
     "final_bmi": "Final BMI (kg/m²)",
     "bmi_reduction": "BMI reduction (kg/m²)",
-    "last_aval_fat_%": "Last measured fat mass (%)",
+    # "last_aval_fat_%": "Last measured fat mass (%)",
     "total_fat_loss_%": "Total fat mass loss (%)",
-    "last_aval_muscle_%": "Last measured muscle mass (%)",
+    # "last_aval_muscle_%": "Last measured muscle mass (%)",
     "total_muscle_change_%": "Total muscle mass change (%)",
     "instant_dropout": "Instant dropout (y/n)",
 
@@ -291,7 +327,7 @@ def load_name_map(source: Optional[Union[str, Dict[str, str]]] = None) -> Dict[s
 
 def load_cluster_config(source: Optional[Union[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """
-    Loads cluster labels and color configurations from a dictionary or JSON file.
+    Loads cluster labels and color configurations from a dictionary or JSON file, if available.
 
     Parameters:
     -----------
@@ -333,7 +369,7 @@ def get_nice_name(variable: str, name_map: Optional[Dict[str, str]] = None) -> s
 
 
 def get_cluster_label(cluster_id: Union[int, str], cluster_config: Optional[Dict[str, Any]] = None) -> str:
-    """Returns human-readable label for a given cluster ID."""
+    """Returns human-readable label for a given cluster ID, if defined"""
     if cluster_config is None:
         cluster_config = {}
     labels = cluster_config.get("cluster_labels", {})
@@ -344,8 +380,7 @@ def get_cluster_label(cluster_id: Union[int, str], cluster_config: Optional[Dict
 def get_cluster_color(
     cluster_id: Union[int, str],
     cluster_config: Optional[Dict[str, Any]] = None,
-    default_palette: Optional[List[Any]] = None,
-) -> Any:
+    default_palette: Optional[List[Any]] = None,) -> Any:
     """Returns aesthetic hex color or RGB tuple for a given cluster ID."""
     if default_palette is None:
         default_palette = DEFAULT_PALETTE
@@ -398,8 +433,7 @@ def resolve_cluster_column_name(
     algorithm: Optional[str] = None,
     k: Optional[int] = None,
     cluster_column: Optional[str] = None,
-    available_columns: Optional[List[str]] = None,
-) -> Tuple[str, Optional[str]]:
+    available_columns: Optional[List[str]] = None,) -> Tuple[str, Optional[str]]:
     """
     Flexibly identifies the exact cluster assignment column and medoid column in SQLite.
 
@@ -485,8 +519,7 @@ def load_and_merge_cluster_data(
     k: Optional[int] = None,
     outcome_table: str = "timetoevent_eb_wgc_compl",
     patient_id_col: str = "medical_record_id",
-    include_outliers: bool = True,
-) -> pd.DataFrame:
+    include_outliers: bool = True,) -> pd.DataFrame:
     """
     Loads clinical patient data and merges with cluster assignments from SQLite.
 
@@ -667,8 +700,7 @@ def chi_squared_test(series1: pd.Series, series2: pd.Series) -> float:
 def _infer_variable_type(
     series: pd.Series,
     threshold: int = 10,
-    variable_name: Optional[str] = None,
-) -> str:
+    variable_name: Optional[str] = None,) -> str:
     """
     Infers if a clinical variable is continuous or categorical.
     Incorporates explicit biological domain rules for clinical variables.
@@ -698,8 +730,7 @@ def calculate_cluster_pvalues(
     cluster_df: pd.DataFrame,
     variable: str,
     cluster_col: str = "cluster_id",
-    is_categorical: bool = False,
-) -> Dict[int, float]:
+    is_categorical: bool = False,) -> Dict[int, float]:
     """
     Calculates p-values comparing each individual cluster to the entire clustered cohort.
 
@@ -743,8 +774,7 @@ def extract_pvalues_for_lollipop(
     cluster_df: pd.DataFrame,
     cluster_col: str = "cluster_id",
     cluster_config_path: Optional[Union[str, Dict]] = None,
-    name_map_path: Optional[Union[str, Dict]] = None,
-) -> Tuple[Dict[str, Dict[int, float]], Dict[str, Dict[int, float]]]:
+    name_map_path: Optional[Union[str, Dict]] = None,) -> Tuple[Dict[str, Dict[int, float]], Dict[str, Dict[int, float]]]:
     """
     Extracts raw and FDR-corrected p-values from results_df for lollipop plotting.
     """
@@ -794,8 +824,7 @@ def extract_pvalues_for_lollipop(
 def calculate_risk_metrics(
     cluster_df: pd.DataFrame,
     outcome_variable: str,
-    cluster_col: str = "cluster_id",
-) -> pd.DataFrame:
+    cluster_col: str = "cluster_id",) -> pd.DataFrame:
     """
     Calculates Risk Ratios (RR) and Risk Differences (RD) comparing each cluster to the entire cohort.
 
@@ -867,8 +896,7 @@ def analyze_cluster_vs_population(
     variable_types: Optional[Dict[str, str]] = None,
     fdr_correction: bool = True,
     alpha: float = 0.05,
-    save_to_db: bool = True,
-) -> pd.DataFrame:
+    save_to_db: bool = True,) -> pd.DataFrame:
     """
     Performs comprehensive statistical comparisons of each cluster against the entire cohort benchmark,
     as well as non-parametric omnibus multi-group comparisons across all clusters.
@@ -1094,8 +1122,7 @@ def compare_clusters_multigroup(
     cluster_config_path: Optional[Union[str, Dict]] = None,
     variable_types: Optional[Dict[str, str]] = None,
     fdr_correction: bool = True,
-    save_to_db: bool = True,
-) -> pd.DataFrame:
+    save_to_db: bool = True,) -> pd.DataFrame:
     """
     Performs multi-group omnibus statistical comparisons across all clusters.
 
@@ -1304,10 +1331,9 @@ def cluster_continuous_distributions(
     title: Optional[str] = None,
     ylabel: Optional[str] = None,
     xlabel: Optional[str] = None,
-    variable_configs: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> None:
+    variable_configs: Optional[Dict[str, Dict[str, Any]]] = None,) -> None:
     """
-    Generates horizontal/split violin plots for continuous variables comparing each cluster to the cohort.
+    Generates horizontal/split violin plots for continuous variables comparing each cluster to the entire cohort.
     """
     output_dir = _resolve_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -1359,8 +1385,7 @@ def _plot_single_violin(
     alpha: float,
     title: Optional[str] = None,
     ylabel: Optional[str] = None,
-    xlabel: Optional[str] = None,
-) -> None:
+    xlabel: Optional[str] = None,) -> None:
     """Internal renderer for a single multi-cluster split violin figure."""
     plt.style.use("seaborn-v0_8-whitegrid")
     clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
@@ -1524,8 +1549,7 @@ def cluster_categorical_distributions(
     ylabel: Optional[str] = None,
     xlabel: Optional[str] = None,
     legend_labels: Optional[Dict[str, str]] = None,
-    variable_configs: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> None:
+    variable_configs: Optional[Dict[str, Dict[str, Any]]] = None,) -> None:
     """
     Generates 100% stacked bar charts for binary/categorical variables comparing clusters to the cohort.
     """
@@ -1582,8 +1606,7 @@ def _plot_single_stacked_bar(
     title: Optional[str] = None,
     ylabel: Optional[str] = None,
     xlabel: Optional[str] = None,
-    legend_labels: Optional[Dict[str, str]] = None,
-) -> None:
+    legend_labels: Optional[Dict[str, str]] = None,) -> None:
     """Internal renderer for a single stacked bar figure."""
     plt.style.use("seaborn-v0_8-whitegrid")
     clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
@@ -1759,8 +1782,7 @@ def plot_cluster_lollipop(
     alpha: float = 0.05,
     title: Optional[str] = None,
     ylabel: Optional[str] = None,
-    xlabel: Optional[str] = None,
-) -> None:
+    xlabel: Optional[str] = None,) -> None:
     """
     Generates a multi-variable horizontal lollipop plot showing percent deviations from the cohort mean.
     """
@@ -1898,8 +1920,7 @@ def plot_cluster_heatmap(
     alpha: float = 0.05,
     title: Optional[str] = None,
     ylabel: Optional[str] = None,
-    xlabel: Optional[str] = None,
-) -> None:
+    xlabel: Optional[str] = None,) -> None:
     """
     Generates a multi-column heatmap of attribute prevalence across clusters,
     featuring a population reference column and cluster-specific gradient color scales.
@@ -2086,8 +2107,7 @@ def plot_cluster_forest(
     title_rd: Optional[str] = None,
     ylabel: Optional[str] = None,
     xlabel_rr: Optional[str] = None,
-    xlabel_rd: Optional[str] = None,
-) -> None:
+    xlabel_rd: Optional[str] = None,) -> None:
     """
     Generates forest plots for Risk Ratios (RR) and/or Risk Differences (RD)
     comparing each cluster against the entire cohort for a binary outcome.
@@ -2137,8 +2157,7 @@ def _plot_single_forest(
     name_map: Dict[str, str],
     cluster_config: Dict[str, Any],
     title: Optional[str] = None,
-    xlabel: Optional[str] = None,
-) -> None:
+    xlabel: Optional[str] = None,) -> None:
     """Internal renderer for a single forest plot."""
     plt.style.use("seaborn-v0_8-whitegrid")
     sort_col = "risk_ratio" if plot_type == "RR" else "risk_difference"
@@ -2225,8 +2244,7 @@ def plot_cluster_summary_grid(
     cluster_df: pd.DataFrame,
     output_filepath: str,
     cluster_col: str = "cluster_id",
-    cluster_config_path: Optional[Union[str, Dict]] = None,
-) -> None:
+    cluster_config_path: Optional[Union[str, Dict]] = None,) -> None:
     """
     Creates a publication-grade 3x2 clinical summary grid comparing core clinical domains:
     Panel A: Cluster size distribution (Bar chart)
@@ -2321,7 +2339,7 @@ def plot_cluster_summary_grid(
 def run_cluster_comparison_pipeline(
     source_db_path: str,
     labels_db_path: Optional[str] = None,
-    distance_config: Optional[str] = "wgc07_eb03",
+    distance_config: Optional[str] = "wgc07_eb03", # these are default configs that are overwritten from notebook! 
     algorithm: str = "pam",
     k: int = 7,
     cluster_column: Optional[str] = None,
@@ -2338,8 +2356,7 @@ def run_cluster_comparison_pipeline(
     cluster_config_path: Optional[Union[str, Dict]] = None,
     alpha: float = 0.05,
     generate_plots: bool = True,
-    generate_full_figure_suite: bool = False,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    generate_full_figure_suite: bool = True,) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Master driver function to execute end-to-end cluster comparisons from notebook calls.
 
@@ -2385,7 +2402,7 @@ def run_cluster_comparison_pipeline(
         Whether to generate standard overview figures (default: True).
     generate_full_figure_suite : bool
         Whether to also automatically generate all individual granular figures
-        (violins, stacked bars, lollipop, heatmap, forest) in output_dir (default: False).
+        (violins, stacked bars, lollipop, heatmap, forest) in output_dir (default: True).
 
     Returns:
     --------
@@ -2464,7 +2481,7 @@ def run_cluster_comparison_pipeline(
             print(f"\n[Figure Suite] Generating full publication figure set in: '{out_d}'...")
 
             # 1. Multi-attribute Prevalence Heatmap
-            wgc_vars = [v for v in DEFAULT_VARIABLE_DOMAINS["Weight Gain Causes (12 WGC)"] if v in merged_df.columns]
+            wgc_vars = [v for v in DEFAULT_VARIABLE_DOMAINS["Weight gain causes"] if v in merged_df.columns]
             eb_bin_vars = [v for v in ["hunger_yn", "satiety_yn", "emotional_eating_yn"] if v in merged_df.columns]
             heatmap_vars = wgc_vars + eb_bin_vars
             if heatmap_vars:
