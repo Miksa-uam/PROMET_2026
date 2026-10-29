@@ -51,6 +51,7 @@ Target Environment: Python 3.10+ / SQLite3 / Pandas / NumPy / SciPy / Statsmodel
 
 import os
 import sys
+import re
 import json
 import sqlite3
 import warnings
@@ -329,6 +330,17 @@ def load_and_prepare_trajectory_data(
         how="inner",
     )
 
+    # 5b. Compute Patient Baseline Weight & Percentage Weight Loss per Measurement
+    first_weight = (
+        trajectory_df.sort_values(["days_from_baseline", measurement_date_col])
+        .groupby([patient_id_col, medical_record_id_col])[body_weight_col]
+        .transform("first")
+    )
+    trajectory_df["baseline_weight_measured"] = first_weight
+    trajectory_df["weight_loss_pct"] = (
+        (trajectory_df[body_weight_col] - first_weight) / first_weight * 100.0
+    )
+
     # 6. Optional Time Cutoff Filtering
     if cutoff_days is not None:
         raw_count = len(trajectory_df)
@@ -354,6 +366,7 @@ def _plot_trajectory_panel(
     patient_id_col: str = "patient_id",
     medical_record_id_col: str = "medical_record_id",
     body_weight_col: str = "weight_kg",
+    use_pct: bool = True,
 ) -> Tuple[float, Optional[np.ndarray], Optional[np.ndarray]]:
     """
     Internal helper to render individual faint lines and a length-adjusted LOWESS smoothed mean.
@@ -361,11 +374,15 @@ def _plot_trajectory_panel(
     """
     n_trajectories = sub_df[[patient_id_col, medical_record_id_col]].drop_duplicates().shape[0]
 
+    y_col = "weight_loss_pct" if (use_pct and "weight_loss_pct" in sub_df.columns) else body_weight_col
+    unit_str = "%" if y_col == "weight_loss_pct" else " kg"
+    ylabel = "Weight Loss (%)" if y_col == "weight_loss_pct" else "Body Weight (kg)"
+
     # 1. Plot individual patient trajectories
     for _, grp in sub_df.groupby([patient_id_col, medical_record_id_col]):
         ax.plot(
             grp["days_from_baseline"],
-            grp[body_weight_col],
+            grp[y_col],
             alpha=0.35,
             linewidth=1.0,
             color=color if color != "red" else NEUTRAL_GRAY,
@@ -375,14 +392,18 @@ def _plot_trajectory_panel(
     followup_times = sub_df.groupby([patient_id_col, medical_record_id_col])["days_from_baseline"].max()
     mean_followup = float(followup_times.mean()) if len(followup_times) > 0 else 0.0
 
-    deltas = sub_df.groupby([patient_id_col, medical_record_id_col])[body_weight_col].apply(
-        lambda x: x.iloc[-1] - x.iloc[0] if len(x) > 1 else 0.0
-    )
+    if y_col == "weight_loss_pct":
+        # In percentage mode, baseline is 0%, so delta is final observed percentage
+        deltas = sub_df.groupby([patient_id_col, medical_record_id_col])[y_col].last()
+    else:
+        deltas = sub_df.groupby([patient_id_col, medical_record_id_col])[y_col].apply(
+            lambda x: x.iloc[-1] - x.iloc[0] if len(x) > 1 else 0.0
+        )
     avg_delta = float(deltas.mean()) if len(deltas) > 0 else 0.0
 
     # 3. Compute Daily Aggregations and LOWESS Smoothed Mean
     daily_stats = (
-        sub_df.groupby("days_from_baseline")[body_weight_col]
+        sub_df.groupby("days_from_baseline")[y_col]
         .agg(["mean", "count", "std"])
         .reset_index()
     )
@@ -436,13 +457,19 @@ def _plot_trajectory_panel(
                 alpha=0.15,
             )
 
+    # Reference clinical thresholds for percentage weight loss
+    if y_col == "weight_loss_pct":
+        ax.axhline(0, color="#666666", linestyle="-", linewidth=0.8, alpha=0.6)
+        ax.axhline(-5, color="#888888", linestyle="--", linewidth=0.7, alpha=0.5)
+        ax.axhline(-10, color="#888888", linestyle=":", linewidth=0.7, alpha=0.5)
+
     ax.set_title(
-        f"{title} (n={n_trajectories})\nAvg Δ: {avg_delta:+.1f} kg | Mean Follow-up: {mean_followup:.0f} d",
+        f"{title} (n={n_trajectories})\nAvg Δ: {avg_delta:+.1f}{unit_str} | Mean Follow-up: {mean_followup:.0f} d",
         fontsize=11,
         fontweight="bold",
     )
     ax.set_xlabel("Days from Baseline", fontsize=10)
-    ax.set_ylabel("Body Weight (kg)", fontsize=10)
+    ax.set_ylabel(ylabel, fontsize=10)
     ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, linestyle="--", alpha=0.5)
 
@@ -457,6 +484,10 @@ def plot_cluster_spaghetti(
     smoothing_frac: float = 0.3,
     title_suffix: str = "",
     figsize: Tuple[int, int] = (20, 12),
+    use_pct: bool = True,
+    patient_id_col: str = "patient_id",
+    medical_record_id_col: str = "medical_record_id",
+    body_weight_col: str = "weight_kg",
 ) -> plt.Figure:
     """
     Renders multi-panel length-adjusted spaghetti plots for the whole population,
@@ -478,11 +509,34 @@ def plot_cluster_spaghetti(
         Additional suffix for the figure super-title.
     figsize : Tuple[int, int]
         Overall figure size (width, height).
+    use_pct : bool
+        If True, plots percentage weight loss (%) relative to baseline (default: True).
+        If False, plots absolute body weight in kg.
+    patient_id_col : str
+        Patient ID column name (default: 'patient_id').
+    medical_record_id_col : str
+        Medical record ID column name (default: 'medical_record_id').
+    body_weight_col : str
+        Weight column in kg (default: 'weight_kg').
 
     Returns:
     --------
     plt.Figure: The rendered matplotlib figure object.
     """
+    # Ensure weight_loss_pct column exists if use_pct is True
+    if use_pct and "weight_loss_pct" not in trajectory_df.columns:
+        first_w = (
+            trajectory_df.sort_values("days_from_baseline")
+            .groupby([patient_id_col, medical_record_id_col])[body_weight_col]
+            .transform("first")
+        )
+        trajectory_df["weight_loss_pct"] = (
+            (trajectory_df[body_weight_col] - first_w) / first_w * 100.0
+        )
+
+    y_col = "weight_loss_pct" if (use_pct and "weight_loss_pct" in trajectory_df.columns) else body_weight_col
+    ylabel = "Weight Loss (%)" if y_col == "weight_loss_pct" else "Body Weight (kg)"
+
     cluster_config = load_cluster_config(cluster_config_path)
     clusters = sorted(trajectory_df["cluster_id"].unique())
 
@@ -501,7 +555,7 @@ def plot_cluster_spaghetti(
     )
     axes_flat = axes.flatten()
 
-    print(f"\n[Spaghetti Plot] Rendering {n_panels}-panel trajectory overview ({len(clusters)} clusters + population + overlay)...")
+    print(f"\n[Spaghetti Plot] Rendering {n_panels}-panel trajectory overview ({len(clusters)} clusters + population + overlay, {ylabel})...")
 
     # Panel 0: Whole Population
     pop_followup, pop_smoothed, pop_sem = _plot_trajectory_panel(
@@ -510,6 +564,10 @@ def plot_cluster_spaghetti(
         title="Whole Population",
         color="red",
         smoothing_frac=smoothing_frac,
+        patient_id_col=patient_id_col,
+        medical_record_id_col=medical_record_id_col,
+        body_weight_col=body_weight_col,
+        use_pct=use_pct,
     )
 
     # Panels 1..K: Individual Clusters
@@ -525,12 +583,22 @@ def plot_cluster_spaghetti(
             title=c_label,
             color=c_color,
             smoothing_frac=smoothing_frac,
+            patient_id_col=patient_id_col,
+            medical_record_id_col=medical_record_id_col,
+            body_weight_col=body_weight_col,
+            use_pct=use_pct,
         )
         cluster_followups[cid] = followup
 
     # Final Panel: Overlay of Smoothed Mean Curves
     overlay_ax = axes_flat[len(clusters) + 1]
     overlay_ax.set_title("Overlay of Smoothed Mean Trajectories", fontsize=13, fontweight="bold")
+
+    # Reference lines on overlay
+    if y_col == "weight_loss_pct":
+        overlay_ax.axhline(0, color="#666666", linestyle="-", linewidth=0.8, alpha=0.6)
+        overlay_ax.axhline(-5, color="#888888", linestyle="--", linewidth=0.7, alpha=0.5)
+        overlay_ax.axhline(-10, color="#888888", linestyle=":", linewidth=0.7, alpha=0.5)
 
     # Draw population line on overlay
     if pop_smoothed is not None:
@@ -559,7 +627,7 @@ def plot_cluster_spaghetti(
         c_color = get_cluster_color(cid, cluster_config)
         c_data = trajectory_df[trajectory_df["cluster_id"] == cid]
 
-        daily = c_data.groupby("days_from_baseline")["weight_kg"].agg(["mean"]).reset_index()
+        daily = c_data.groupby("days_from_baseline")[y_col].agg(["mean"]).reset_index()
         if len(daily) > 3:
             c_smoothed = sm.nonparametric.lowess(
                 daily["mean"],
@@ -587,7 +655,7 @@ def plot_cluster_spaghetti(
                 )
 
     overlay_ax.set_xlabel("Days from Baseline", fontsize=10)
-    overlay_ax.set_ylabel("Body Weight (kg)", fontsize=10)
+    overlay_ax.set_ylabel(ylabel, fontsize=10)
     overlay_ax.legend(loc="upper right", fontsize=8)
     overlay_ax.grid(True, linestyle="--", alpha=0.5)
 
@@ -595,8 +663,9 @@ def plot_cluster_spaghetti(
     for i in range(len(clusters) + 2, len(axes_flat)):
         axes_flat[i].set_visible(False)
 
+    metric_name = "Percentage Weight Loss" if y_col == "weight_loss_pct" else "Weight Loss"
     fig.suptitle(
-        f"Weight Loss Trajectories by Behavioral Phenotype Cluster {title_suffix}".strip(),
+        f"{metric_name} Trajectories by Behavioral Phenotype Cluster {title_suffix}".strip(),
         fontsize=16,
         fontweight="bold",
     )
@@ -880,6 +949,202 @@ def fit_trajectory_mixed_model(
     return result, df_model
 
 
+def analyze_trajectory_mixed_model(
+    lmm_result: Any,
+    df_model: pd.DataFrame,
+    use_deviation_coding: bool = True,
+    reference_cluster: int = 0,
+    patient_id_col: str = "medical_record_id",
+    cluster_config_path: Optional[Union[str, Dict]] = None,
+) -> Dict[str, Any]:
+    """
+    Performs rigorous hypothesis testing on Linear Mixed-Effects Model (LMM) trajectories.
+
+    Statistical Testing Strategy:
+    -----------------------------
+    1. Omnibus Trajectory Difference Test (Cluster x Time Spline Interaction):
+       Joint Wald test across all interaction coefficients:
+         H0: beta_{cluster x time} = 0
+       Tests whether non-linear weight trajectories differ significantly across clusters.
+
+    2. Omnibus Baseline Difference Test (Cluster Main Effects):
+       Joint Wald test across cluster main effect coefficients:
+         H0: beta_{cluster} = 0
+       Tests whether baseline body weight differs significantly across clusters.
+
+    3. Per-Cluster Trajectory Contrasts:
+       - Deviation Coding (use_deviation_coding=True):
+         Contrasts each cluster's trajectory shape against the grand mean population trajectory.
+       - Reference Coding (use_deviation_coding=False):
+         Contrasts each non-reference cluster against reference_cluster (e.g. Cluster 0).
+
+    Parameters:
+    -----------
+    lmm_result : MixedLMResults
+        Fitted MixedLM results object.
+    df_model : pd.DataFrame
+        DataFrame used to fit the model.
+    use_deviation_coding : bool
+        Whether deviation coding (Sum) or reference coding was used.
+    reference_cluster : int
+        Reference cluster index if reference coding was used.
+    patient_id_col : str
+        Column identifying individual patients (default: 'medical_record_id').
+    cluster_config_path : Optional[Union[str, Dict]]
+        Path to cluster config JSON or dictionary for human-readable labels.
+
+    Returns:
+    --------
+    Dict[str, Any]:
+        Dictionary containing:
+        - 'omnibus_trajectory': dict(chi2, df, p_value)
+        - 'omnibus_baseline': dict(chi2, df, p_value)
+        - 'cluster_contrasts_df': pd.DataFrame with per-cluster metrics & tests
+    """
+    cluster_config = load_cluster_config(cluster_config_path)
+    clusters = sorted(df_model["cluster_id"].unique())
+    k = len(clusters)
+    param_names = lmm_result.params.index.tolist()
+
+    # 1. Omnibus Trajectory Test (Cluster x Time Spline interaction terms)
+    inter_terms = [p for p in param_names if ":" in p and "patsy.bs" in p]
+    if len(inter_terms) > 0:
+        w_traj = lmm_result.wald_test(inter_terms)
+        chi2_traj = float(np.squeeze(w_traj.statistic))
+        df_traj = len(inter_terms)
+        p_traj = float(w_traj.pvalue)
+    else:
+        chi2_traj, df_traj, p_traj = np.nan, 0, np.nan
+
+    # 2. Omnibus Baseline Test (Cluster main terms)
+    cluster_main = [p for p in param_names if "cluster_id" in p and ":" not in p]
+    if len(cluster_main) > 0:
+        w_base = lmm_result.wald_test(cluster_main)
+        chi2_base = float(np.squeeze(w_base.statistic))
+        df_base = len(cluster_main)
+        p_base = float(w_base.pvalue)
+    else:
+        chi2_base, df_base, p_base = np.nan, 0, np.nan
+
+    # Identify spline degrees from parameter names
+    spline_indices = sorted(list(set([
+        re.findall(r"patsy\.bs.*?\[(\d+)\]", t)[0]
+        for t in inter_terms if re.search(r"patsy\.bs.*?\[(\d+)\]", t)
+    ])))
+    n_spline = len(spline_indices) if len(spline_indices) > 0 else 3
+
+    # 3. Per-Cluster Trajectory Contrasts
+    rows = []
+    for cid in clusters:
+        sub_c = df_model[df_model["cluster_id"].astype(str) == str(cid)]
+        pt_fus = sub_c.groupby(patient_id_col)["days_from_baseline"].max()
+        n_pts = len(pt_fus)
+        mean_fu = float(pt_fus.mean()) if n_pts > 0 else np.nan
+        median_fu = float(pt_fus.median()) if n_pts > 0 else np.nan
+
+        # Observed weight change
+        w_first = sub_c.sort_values("days_from_baseline").groupby(patient_id_col)["weight_kg"].first().mean()
+        w_last = sub_c.sort_values("days_from_baseline").groupby(patient_id_col)["weight_kg"].last().mean()
+        delta_w = float(w_last - w_first) if (pd.notna(w_last) and pd.notna(w_first)) else np.nan
+
+        c_label = get_cluster_label(cid, cluster_config)
+
+        if use_deviation_coding:
+            contrast_type = "vs. Grand Mean"
+            if cid < k - 1:
+                # Explicit level in Sum coding
+                terms = [p for p in inter_terms if f"[S.{cid}]" in p]
+                if terms:
+                    w_c = lmm_result.wald_test(terms)
+                    stat_c = float(np.squeeze(w_c.statistic))
+                    pval_c = float(w_c.pvalue)
+                else:
+                    stat_c, pval_c = np.nan, np.nan
+            else:
+                # Omitted level in Sum coding: beta_{k-1} = -sum(beta_0 ... beta_{k-2})
+                R = np.zeros((n_spline, len(param_names)))
+                for i_s, s_idx in enumerate(spline_indices):
+                    for c_other in clusters[:-1]:
+                        p_matches = [p for p in inter_terms if f"[S.{c_other}]" in p and f"[{s_idx}]" in p]
+                        for p_m in p_matches:
+                            R[i_s, param_names.index(p_m)] = 1.0
+                try:
+                    w_c = lmm_result.wald_test(R)
+                    stat_c = float(np.squeeze(w_c.statistic))
+                    pval_c = float(w_c.pvalue)
+                except Exception:
+                    stat_c, pval_c = np.nan, np.nan
+        else:
+            contrast_type = f"vs. Cluster {reference_cluster}"
+            if cid == reference_cluster:
+                stat_c, pval_c = np.nan, np.nan
+            else:
+                terms = [p for p in inter_terms if f"[{cid}]" in p or f"[T.{cid}]" in p]
+                if terms:
+                    w_c = lmm_result.wald_test(terms)
+                    stat_c = float(np.squeeze(w_c.statistic))
+                    pval_c = float(w_c.pvalue)
+                else:
+                    stat_c, pval_c = np.nan, np.nan
+
+        # Formatting significance flag
+        if pd.isna(pval_c):
+            stars = "Ref" if not use_deviation_coding and cid == reference_cluster else "N/A"
+        elif pval_c < 0.001:
+            stars = "***"
+        elif pval_c < 0.01:
+            stars = "**"
+        elif pval_c < 0.05:
+            stars = "*"
+        elif pval_c < 0.1:
+            stars = "."
+        else:
+            stars = "ns"
+
+        rows.append({
+            "cluster_id": cid,
+            "cluster_label": c_label,
+            "contrast_type": contrast_type,
+            "n_patients": n_pts,
+            "mean_followup_days": round(mean_fu, 1) if not np.isnan(mean_fu) else np.nan,
+            "median_followup_days": round(median_fu, 1) if not np.isnan(median_fu) else np.nan,
+            "observed_mean_delta_kg": round(delta_w, 2) if not np.isnan(delta_w) else np.nan,
+            "wald_chi2": round(stat_c, 2) if not np.isnan(stat_c) else np.nan,
+            "df": n_spline,
+            "p_value": pval_c,
+            "significance": stars,
+        })
+
+    contrast_df = pd.DataFrame(rows)
+
+    # Print publication-grade diagnostics
+    print("\n" + "=" * 80)
+    print("LONGITUDINAL TRAJECTORY STATISTICAL ANALYSIS (LMM WALD TESTS)")
+    print("=" * 80)
+    p_traj_str = "< 0.0001" if p_traj < 0.0001 else f"= {p_traj:.4f}"
+    p_base_str = "< 0.0001" if p_base < 0.0001 else f"= {p_base:.4f}"
+    print(f"1. Trajectory Shape Differences (Cluster x Time Interaction):")
+    print(f"   Omnibus Wald Chi2 = {chi2_traj:.2f} (df={df_traj}), p-value {p_traj_str}")
+    if p_traj < 0.05:
+        print("   -> Conclusion: Longitudinal weight loss trajectories differ significantly between clusters.")
+    else:
+        print("   -> Conclusion: Trajectories do not differ significantly between clusters (parallel profiles).")
+
+    print(f"\n2. Baseline Weight Differences (Cluster Main Effect):")
+    print(f"   Omnibus Wald Chi2 = {chi2_base:.2f} (df={df_base}), p-value {p_base_str}")
+
+    print(f"\n3. Per-Cluster Trajectory Contrasts ({contrast_type}):")
+    disp_cols = ["cluster_id", "cluster_label", "n_patients", "mean_followup_days", "observed_mean_delta_kg", "wald_chi2", "p_value", "significance"]
+    print(contrast_df[disp_cols].to_string(index=False))
+    print("=" * 80 + "\n")
+
+    return {
+        "omnibus_trajectory": {"chi2": chi2_traj, "df": df_traj, "p_value": p_traj},
+        "omnibus_baseline": {"chi2": chi2_base, "df": df_base, "p_value": p_base},
+        "cluster_contrasts_df": contrast_df,
+    }
+
+
 def plot_lmm_predicted_trajectories(
     lmm_result: Any,
     df_model: pd.DataFrame,
@@ -888,9 +1153,23 @@ def plot_lmm_predicted_trajectories(
     cluster_config_path: Optional[Union[str, Dict]] = None,
     title_suffix: str = "",
     figsize: Tuple[int, int] = (12, 8),
+    stats_summary: Optional[Dict[str, Any]] = None,
+    dashing_cutoff: str = "cluster_mean",
+    annotate_statistics: bool = True,
+    patient_id_col: str = "medical_record_id",
 ) -> plt.Figure:
     """
     Renders model-predicted mean weight loss trajectories per cluster over a standardized time grid.
+
+    Follow-Up Length Adjustment:
+    ----------------------------
+    Solid curves are plotted across the high-density observation window (<= cluster mean follow-up).
+    Dashed curves indicate sparse cohort extrapolation (> cluster mean follow-up).
+
+    Statistical Significance Annotation:
+    -----------------------------------
+    If annotate_statistics is True, the omnibus trajectory difference Wald test is annotated
+    under the figure title, and per-cluster contrast p-values are annotated in the legend.
 
     Parameters:
     -----------
@@ -908,6 +1187,19 @@ def plot_lmm_predicted_trajectories(
         Additional title suffix.
     figsize : Tuple[int, int]
         Figure size dimensions.
+    stats_summary : Optional[Dict[str, Any]]
+        Pre-computed trajectory statistical analysis (from analyze_trajectory_mixed_model).
+        If None and annotate_statistics is True, computed automatically.
+    dashing_cutoff : str
+        Threshold where solid trajectory transitions to dashed line:
+        - 'cluster_mean': Each cluster's mean follow-up duration (default).
+        - 'cohort_mean': Whole cohort's mean follow-up duration.
+        - 'max': Last observed measurement in each cluster.
+        - numeric value: Specific fixed day cutoff.
+    annotate_statistics : bool
+        Whether to annotate Wald test statistics in title and legend.
+    patient_id_col : str
+        Patient ID column name (default: 'medical_record_id').
 
     Returns:
     --------
@@ -920,6 +1212,23 @@ def plot_lmm_predicted_trajectories(
         df_model["days_from_baseline"].max(),
         200,
     )
+
+    # Compute trajectory statistical tests if not already provided
+    if annotate_statistics and stats_summary is None:
+        try:
+            stats_summary = analyze_trajectory_mixed_model(
+                lmm_result=lmm_result,
+                df_model=df_model,
+                patient_id_col=patient_id_col,
+                cluster_config_path=cluster_config_path,
+            )
+        except Exception as e:
+            print(f"Warning: Could not compute trajectory statistics for annotation: {e}")
+            stats_summary = None
+
+    # Calculate overall cohort mean follow-up
+    all_pt_fus = df_model.groupby(patient_id_col)["days_from_baseline"].max()
+    cohort_mean_fu = float(all_pt_fus.mean()) if len(all_pt_fus) > 0 else 0.0
 
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -949,27 +1258,96 @@ def plot_lmm_predicted_trajectories(
         c_label = get_cluster_label(cid, cluster_config)
         c_color = get_cluster_color(cid, cluster_config)
 
-        # Length-adjusted trajectory styling:
-        # Solid curve across observed follow-up window; dashed curve for model extrapolation
-        c_max_day = float(df_model.loc[df_model["cluster_id"].astype(str) == str(cid), "days_from_baseline"].max())
+        # Statistical annotation in legend
+        legend_lbl = c_label
+        if annotate_statistics and stats_summary is not None:
+            c_df = stats_summary["cluster_contrasts_df"]
+            c_row = c_df[c_df["cluster_id"].astype(str) == str(cid)]
+            if not c_row.empty:
+                pval_c = c_row.iloc[0]["p_value"]
+                stars_c = c_row.iloc[0]["significance"]
+                if pd.isna(pval_c) or stars_c == "Ref":
+                    legend_lbl = f"{c_label} (Ref)"
+                elif pval_c < 0.001:
+                    legend_lbl = f"{c_label} (p < 0.001***)"
+                else:
+                    star_suffix = f"{stars_c}" if stars_c != "ns" else ""
+                    legend_lbl = f"{c_label} (p = {pval_c:.3f}{star_suffix})"
+
+        # Determine cutoff day for dashing
+        sub_c = df_model[df_model["cluster_id"].astype(str) == str(cid)]
+        pt_fus = sub_c.groupby(patient_id_col)["days_from_baseline"].max()
+        c_mean_fu = float(pt_fus.mean()) if len(pt_fus) > 0 else cohort_mean_fu
+
+        if dashing_cutoff == "cluster_mean":
+            cutoff_day = c_mean_fu
+        elif dashing_cutoff == "cohort_mean":
+            cutoff_day = cohort_mean_fu
+        elif dashing_cutoff == "max":
+            cutoff_day = float(sub_c["days_from_baseline"].max())
+        elif isinstance(dashing_cutoff, (int, float)):
+            cutoff_day = float(dashing_cutoff)
+        else:
+            cutoff_day = c_mean_fu
+
         pred_vals = np.asarray(preds)
 
-        obs_mask = time_grid <= c_max_day
-        ax.plot(time_grid[obs_mask], pred_vals[obs_mask], color=c_color, linewidth=2.8, label=c_label)
+        # 1. High-density observed follow-up window (solid line)
+        obs_mask = time_grid <= cutoff_day
+        ax.plot(
+            time_grid[obs_mask],
+            pred_vals[obs_mask],
+            color=c_color,
+            linewidth=2.8,
+            label=legend_lbl,
+            zorder=3,
+        )
 
-        ext_mask = time_grid >= c_max_day
+        # 2. Sparse cohort extrapolation window (dashed line)
+        ext_mask = time_grid >= cutoff_day
         if np.sum(ext_mask) > 1:
-            ax.plot(time_grid[ext_mask], pred_vals[ext_mask], color=c_color, linewidth=1.8, linestyle="--", alpha=0.7)
+            ax.plot(
+                time_grid[ext_mask],
+                pred_vals[ext_mask],
+                color=c_color,
+                linewidth=1.8,
+                linestyle="--",
+                alpha=0.75,
+                zorder=2,
+            )
 
-    ax.set_title(
-        f"LMM-Predicted Weight Trajectories by Cluster {title_suffix}".strip(),
-        fontsize=15,
-        fontweight="bold",
-    )
+    # Title & Subtitle with statistical test results
+    if annotate_statistics and stats_summary is not None:
+        omni = stats_summary["omnibus_trajectory"]
+        p_val = omni["p_value"]
+        p_str = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.4f}"
+        stars = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else ("*" if p_val < 0.05 else "ns"))
+        sub_title = (
+            f"Trajectory Differences (Cluster × Time Spline): Omnibus Wald χ² = {omni['chi2']:.2f} "
+            f"(df={omni['df']}), {p_str} [{stars}]"
+        )
+        full_title = f"LMM-Predicted Weight Trajectories by Cluster {title_suffix}\n{sub_title}".strip()
+    else:
+        full_title = f"LMM-Predicted Weight Trajectories by Cluster {title_suffix}".strip()
+
+    ax.set_title(full_title, fontsize=13, fontweight="bold", pad=12)
     ax.set_xlabel("Follow-up Length (Days)", fontsize=12)
     ax.set_ylabel("Predicted Body Weight (kg)", fontsize=12)
     ax.legend(title="Behavioral Cluster", loc="upper right", fontsize=10)
     ax.grid(True, linestyle="--", alpha=0.6)
+
+    # Informative footnote explaining the solid vs dashed transitions
+    ax.text(
+        0.015,
+        0.025,
+        "Note: Solid lines represent trajectories up to cluster mean follow-up; dashed lines indicate sparse cohort extrapolation.",
+        transform=ax.transAxes,
+        fontsize=8.5,
+        fontstyle="italic",
+        color="#333333",
+        bbox=dict(boxstyle="round,pad=0.35", facecolor="#ffffff", edgecolor="#cccccc", alpha=0.90),
+    )
+
     plt.tight_layout()
 
     dest_path = output_filepath
@@ -1430,13 +1808,37 @@ def run_cluster_modeling_pipeline(
         time_degree=time_degree,
     )
 
+    # 3b. Statistical Significance Analysis of Longitudinal Trajectories
+    trajectory_analysis = analyze_trajectory_mixed_model(
+        lmm_result=lmm_result,
+        df_model=df_model,
+        use_deviation_coding=True,
+        patient_id_col="medical_record_id",
+        cluster_config_path=cluster_config_path,
+    )
+
     fig_lmm = plot_lmm_predicted_trajectories(
         lmm_result=lmm_result,
         df_model=df_model,
         output_filepath=os.path.join(out_dir, f"lmm_predicted_{prefix}.png") if out_dir else None,
         cluster_config_path=cluster_config_path,
         title_suffix=f"({prefix}, {'Adjusted' if adjust_for_covariates else 'Unadjusted'})",
+        stats_summary=trajectory_analysis,
+        dashing_cutoff="cluster_mean",
+        patient_id_col="medical_record_id",
     )
+
+    # Save trajectory statistical test results to SQLite
+    if save_to_db and output_db_path:
+        try:
+            traj_test_tbl = f"{prefix}_trajectory_lmm_tests"
+            with sqlite3.connect(_resolve_path(output_db_path)) as conn:
+                trajectory_analysis["cluster_contrasts_df"].to_sql(
+                    traj_test_tbl, conn, if_exists="replace", index=False
+                )
+            print(f"  ✓ Saved LMM Trajectory Tests to DB: '{traj_test_tbl}'")
+        except Exception as e:
+            print(f"Warning: Failed to save trajectory test table to database: {e}")
 
     # 4. Regression Outcome Models
     reg_table_name = f"{prefix}_outcome_regressions"
@@ -1476,6 +1878,8 @@ def run_cluster_modeling_pipeline(
         "trajectory_df": trajectory_df,
         "cohort_df": cohort_df,
         "lmm_result": lmm_result,
+        "trajectory_statistical_analysis": trajectory_analysis,
+        "trajectory_tests_df": trajectory_analysis["cluster_contrasts_df"],
         "nadir_metrics_df": nadir_summary_df,
         "patient_nadir_df": patient_nadir_df,
         "regression_results_df": reg_df,
