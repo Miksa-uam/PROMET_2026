@@ -627,19 +627,19 @@ def plot_clustering_evaluation_profiles(
     performance_df: pd.DataFrame,
     save_path: Optional[str] = None,) -> None:
     """
-    Generates a 5-panel comparative evaluation composite plot comparing algorithms and distance configurations.
+    Generates a 2-panel comparative evaluation composite plot comparing algorithms and distance configurations.
     Layout: 2 rows x 3 columns (3 on top, 2 on bottom, 6th cell hidden).
     Panel order:
       1. Silhouette Score (Higher is Better)
       2. Subsampling Stability ARI (Higher is Better)
-      NOTE: Do NOT compute Calinski-Harabasz and Davies-Bouldin indices and Inertia, 
+      NOTE: Should NOT compute Calinski-Harabasz and Davies-Bouldin indices and Inertia, 
       because these all assume continuous data in an Euclidean space. 
     Safely overwrites any existing file.
     """
     algorithms = performance_df["algorithm"].unique()
     tables = performance_df["distance_table"].unique()
 
-    fig, axes = plt.subplots(2, 3, figsize=(19, 10.5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
 
     algo_styles = {
         "pam": {"marker": "o", "linestyle": "-", "name": "PAM (k-medoids++)"},
@@ -651,8 +651,7 @@ def plot_clustering_evaluation_profiles(
     palette = ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02"]
     table_colors = {t: palette[i % len(palette)] for i, t in enumerate(tables)}
 
-    # Row 1, Col 0: Panel 1 - Silhouette Score (Higher is Better)
-    ax1 = axes[0, 0]
+    # Panel 1 - Silhouette Score (Higher is Better)
     for algo in algorithms:
         style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
         for tbl in tables:
@@ -670,8 +669,7 @@ def plot_clustering_evaluation_profiles(
     ax1.grid(True, linestyle="--", alpha=0.4)
     ax1.legend(fontsize=8, loc="lower right")
 
-    # Row 1, Col 1: Panel 2 - Subsampling Stability ARI (Higher is Better)
-    ax2 = axes[0, 1]
+    # Panel 2 - Subsampling Stability ARI (Higher is Better)
     for algo in algorithms:
         style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
         for tbl in tables:
@@ -693,7 +691,7 @@ def plot_clustering_evaluation_profiles(
             )
 
     ax2.axhline(0.75, color="red", linestyle=":", linewidth=1.5, label="High Stability Threshold (0.75)")
-    ax2.set_title("E. Subsampling Stability (Adjusted Rand Index)\n(80% Subsampling Without Replacement — 100 Iterations)", fontsize=11, fontweight="bold")
+    ax2.set_title("B. Subsampling Stability (Adjusted Rand Index)\n(80% Subsampling Without Replacement — 100 Iterations)", fontsize=11, fontweight="bold")
     ax2.set_xlabel("Number of Clusters (k)", fontsize=10)
     ax2.set_ylabel("Mean Adjusted Rand Index (ARI)", fontsize=10)
     ax2.set_xticks(performance_df["k"].unique())
@@ -809,8 +807,7 @@ def run_clustering_pipeline(
     output_dir: Optional[str] = None,
     performance_table_name: str = DEFAULT_PERFORMANCE_TABLE,
     labels_table_name: str = DEFAULT_LABELS_TABLE,
-    n_jobs: int = -1,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    n_jobs: int = -1,) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Master driver function to execute clustering and evaluation across specified distance matrices.
 

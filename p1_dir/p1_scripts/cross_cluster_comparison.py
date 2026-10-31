@@ -71,6 +71,7 @@ Target Environment: Python 3.10+ / SQLite3 / NumPy / pandas / matplotlib / seabo
 
 import os
 import sys
+import json
 import sqlite3
 import numpy as np
 import pandas as pd
@@ -598,6 +599,42 @@ def plot_cross_k_macro_grid(
 # FUNCTIONALITY 2B: CROSS-k MICRO VIEW (PATIENT FLOW ALLUVIAL DIAGRAM)
 # =============================================================================
 
+def _load_default_cluster_palette() -> List[str]:
+    """Loads default 10-color publication palette from cluster_color_dict.json if available."""
+    fallback_palette = [
+        "#1f77b4",  # Cluster 1: Blue
+        "#ff7f0e",  # Cluster 2: Orange
+        "#2ca02c",  # Cluster 3: Green
+        "#d62728",  # Cluster 4: Red
+        "#9467bd",  # Cluster 5: Purple
+        "#8c564b",  # Cluster 6: Brown
+        "#e377c2",  # Cluster 7: Pink
+        "#7f7f7f",  # Cluster 8: Gray
+        "#bcbd22",  # Cluster 9: Olive / Yellow-green
+        "#17becf",  # Cluster 10: Teal
+    ]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, "cluster_color_dict.json"),
+        os.path.join(os.getcwd(), "cluster_color_dict.json"),
+        os.path.join(os.getcwd(), "p1_dir", "p1_scripts", "cluster_color_dict.json"),
+    ]
+    for c_path in candidates:
+        if os.path.exists(c_path):
+            try:
+                with open(c_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                c_dict = data.get("cluster_colors", data)
+                palette = []
+                for i in range(1, 11):
+                    col = c_dict.get(str(i), c_dict.get(f"Cluster {i}", fallback_palette[i - 1]))
+                    palette.append(col)
+                return palette
+            except Exception:
+                pass
+    return fallback_palette
+
+
 def plot_patient_flow_alluvial(
     labels_df: pd.DataFrame,
     solution_columns: List[str],
@@ -607,7 +644,7 @@ def plot_patient_flow_alluvial(
     fig_name: str = "patient_flow_alluvial.png",
     color_mode: str = "white_intermediates",
     figsize: Tuple[float, float] = (13, 7.5),
-    palette: Optional[List[str]] = None,
+    palette: Optional[Union[List[str], str]] = None,
 ) -> pd.DataFrame:
     """
     Renders a publication-grade patient flow alluvial diagram tracking cluster
@@ -659,12 +696,19 @@ def plot_patient_flow_alluvial(
         step_labels = [format_solution_label(c, include_k=True) for c in solution_columns]
 
     if palette is None:
-        # Publication-grade categorical palette
-        palette = [
-            "#1b9e77", "#d95f02", "#7570b3", "#e7298a",
-            "#66a61e", "#e6ab02", "#a6761d", "#386cb0",
-            "#f0027f", "#bf5b17", "#666666"
-        ]
+        palette = _load_default_cluster_palette()
+    elif isinstance(palette, str):
+        # Support passing a path to a JSON color dictionary
+        if os.path.exists(palette):
+            try:
+                with open(palette, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                c_dict = d.get("cluster_colors", d)
+                palette = [c_dict.get(str(i), c_dict.get(f"Cluster {i}", "#7f7f7f")) for i in range(1, 11)]
+            except Exception:
+                palette = _load_default_cluster_palette()
+        else:
+            palette = _load_default_cluster_palette()
 
     n_steps = len(solution_columns)
     total_patients = len(labels_df)

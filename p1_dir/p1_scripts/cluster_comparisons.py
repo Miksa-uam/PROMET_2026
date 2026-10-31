@@ -123,7 +123,43 @@ if hasattr(sys.stdout, "reconfigure"):
 # DEFAULT COLOR PALETTES & VISUAL CONSTANTS
 # =============================================================================
 
-DEFAULT_PALETTE = sns.color_palette("husl", 12)
+def _load_default_cluster_palette() -> List[str]:
+    """Loads default 10-color publication palette from cluster_color_dict.json if available."""
+    fallback_palette = [
+        "#1f77b4",  # Cluster 1: Blue
+        "#ff7f0e",  # Cluster 2: Orange
+        "#2ca02c",  # Cluster 3: Green
+        "#d62728",  # Cluster 4: Red
+        "#9467bd",  # Cluster 5: Purple
+        "#8c564b",  # Cluster 6: Brown
+        "#e377c2",  # Cluster 7: Pink
+        "#7f7f7f",  # Cluster 8: Gray
+        "#bcbd22",  # Cluster 9: Olive / Yellow-green
+        "#17becf",  # Cluster 10: Teal
+    ]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, "cluster_color_dict.json"),
+        os.path.join(os.getcwd(), "cluster_color_dict.json"),
+        os.path.join(os.getcwd(), "p1_dir", "p1_scripts", "cluster_color_dict.json"),
+    ]
+    for c_path in candidates:
+        if os.path.exists(c_path):
+            try:
+                with open(c_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                c_dict = data.get("cluster_colors", data)
+                palette = []
+                for i in range(1, 11):
+                    col = c_dict.get(str(i), c_dict.get(f"Cluster {i}", fallback_palette[i - 1]))
+                    palette.append(col)
+                return palette
+            except Exception:
+                pass
+    return fallback_palette
+
+
+DEFAULT_PALETTE = _load_default_cluster_palette()
 POPULATION_COLOR = "#4D4D4D"         # Neutral dark gray for cohort benchmark
 CLUSTER_COLOR = "aquamarine"         # Accent cluster color for split violins
 ACHIEVED_COLOR = "#4361EE"          # Vibrant blue for outcome achieved / category 1
@@ -345,20 +381,40 @@ def load_cluster_config(source: Optional[Union[str, Dict[str, Any]]] = None) -> 
     Dict[str, Any]: Configuration dictionary with 'cluster_labels' and 'cluster_colors'.
     """
     default_config: Dict[str, Any] = {"cluster_labels": {}, "cluster_colors": {}}
+
+    # Load base colors from cluster_color_dict.json
+    default_json = _resolve_path("cluster_color_dict.json")
+    if os.path.exists(default_json):
+        try:
+            with open(default_json, "r", encoding="utf-8") as f:
+                d_colors = json.load(f)
+            default_config["cluster_colors"].update(d_colors.get("cluster_colors", d_colors))
+        except Exception:
+            pass
+
     if source is None:
         return default_config
 
     if isinstance(source, dict):
-        return source
+        if "cluster_colors" in source:
+            default_config["cluster_colors"].update(source["cluster_colors"])
+        if "cluster_labels" in source:
+            default_config["cluster_labels"].update(source["cluster_labels"])
+        return default_config
 
     if isinstance(source, str):
-        json_path = _resolve_path(source)
+        target = source
+        if not target.endswith(".json") and os.path.exists(_resolve_path(f"{target}.json")):
+            target = f"{target}.json"
+        json_path = _resolve_path(target)
         if os.path.exists(json_path):
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                    print(f"[Config] Loaded cluster configuration from: '{json_path}'")
-                    return cfg
+                default_config["cluster_labels"].update(cfg.get("cluster_labels", {}))
+                default_config["cluster_colors"].update(cfg.get("cluster_colors", cfg))
+                print(f"[Config] Loaded cluster configuration from: '{json_path}'")
+                return default_config
             except Exception as e:
                 print(f"Warning: Failed to load cluster config '{json_path}': {e}. Using defaults.")
         else:
@@ -375,12 +431,22 @@ def get_nice_name(variable: str, name_map: Optional[Dict[str, str]] = None) -> s
 
 
 def get_cluster_label(cluster_id: Union[int, str], cluster_config: Optional[Dict[str, Any]] = None) -> str:
-    """Returns human-readable label for a given cluster ID, if defined"""
+    """Returns human-readable label for a given cluster ID, falling back to 1-indexed 'Cluster {id + 1}'."""
     if cluster_config is None:
         cluster_config = {}
     labels = cluster_config.get("cluster_labels", {})
     str_id = str(cluster_id)
-    return labels.get(str_id, f"Cluster {cluster_id}")
+    if str_id in labels:
+        return labels[str_id]
+    if cluster_id in labels:
+        return labels[cluster_id]
+    try:
+        cid_int = int(cluster_id)
+        if cid_int == -1:
+            return "Noise / Outliers"
+        return f"Cluster {cid_int + 1}"
+    except (ValueError, TypeError):
+        return f"Cluster {cluster_id}"
 
 
 def get_cluster_color(
@@ -391,16 +457,34 @@ def get_cluster_color(
     if default_palette is None:
         default_palette = DEFAULT_PALETTE
     if cluster_config is None:
-        cluster_config = {}
-    colors = cluster_config.get("cluster_colors", {})
+        cluster_config = load_cluster_config(None)
+    colors = cluster_config.get("cluster_colors", {}) if cluster_config else {}
+
+    # 1. Match via human-readable label (e.g. 0-indexed DB ID 0 -> 'Cluster 1')
+    c_lbl = get_cluster_label(cluster_id, cluster_config)
+    if c_lbl in colors:
+        return colors[c_lbl]
+
+    # 2. Match via direct string representation
     str_id = str(cluster_id)
     if str_id in colors:
         return colors[str_id]
+    if cluster_id in colors:
+        return colors[cluster_id]
+
+    # 3. Numeric conversion & fallback
     try:
-        int_id = int(cluster_id)
-        return default_palette[int_id % len(default_palette)]
-    except ValueError:
-        return "gray"
+        cid_int = int(cluster_id)
+        if cid_int == -1:
+            return "#7f7f7f"
+        return default_palette[cid_int % len(default_palette)]
+    except (ValueError, TypeError):
+        match = re.search(r"(\d+)", str_id)
+        if match:
+            c_num = int(match.group(1))
+            if c_num >= 1:
+                return default_palette[(c_num - 1) % len(default_palette)]
+        return "#7f7f7f"
 
 
 def _extract_percentage_from_table_cell(cell_value: Any) -> float:
@@ -412,6 +496,21 @@ def _extract_percentage_from_table_cell(cell_value: Any) -> float:
         return np.nan
     except Exception:
         return np.nan
+
+
+def _extract_mean_sd_from_table_cell(cell_value: Any) -> Tuple[Optional[float], Optional[float]]:
+    """Extracts mean and SD floats from table cell strings formatted as 'Mean (±SD)' or 'Mean (±SD)*'."""
+    try:
+        s = str(cell_value).strip()
+        match = re.search(r"(\d+\.?\d*)\s*\([^\d]*(\d+\.?\d*)\)", s)
+        if match:
+            return float(match.group(1)), float(match.group(2))
+        match_single = re.search(r"^(\d+\.?\d*)", s)
+        if match_single:
+            return float(match_single.group(1)), None
+        return None, None
+    except Exception:
+        return None, None
 
 
 def _parse_cluster_column_header(header: str, cluster_config: Optional[Dict[str, Any]] = None) -> Optional[int]:
@@ -635,7 +734,7 @@ def load_and_merge_cluster_data(
     cluster_counts = merged_df["cluster_id"].value_counts().sort_index()
     for cid, cnt in cluster_counts.items():
         pct = (cnt / len(merged_df)) * 100
-        label_str = f"Cluster {cid}" if cid != -1 else "Outliers"
+        label_str = f"Cluster {int(cid) + 1}" if cid != -1 else "Outliers"
         print(f"    - {label_str}: {cnt} patients ({pct:.1f}%)")
 
     # Exemplar medoid patient IDs diagnostic
@@ -806,9 +905,13 @@ def extract_pvalues_for_lollipop(
             p_fdr_col = f"{c_label}: p-value (FDR-corrected)"
 
             if p_raw_col not in var_row.columns:
-                p_raw_col = f"Cluster {cid}: p-value"
+                p_raw_col = f"Cluster {int(cid) + 1}: p-value" if cid != -1 else "Cluster -1: p-value"
+                if p_raw_col not in var_row.columns:
+                    p_raw_col = f"Cluster {cid}: p-value"
             if p_fdr_col not in var_row.columns:
-                p_fdr_col = f"Cluster {cid}: p-value (FDR-corrected)"
+                p_fdr_col = f"Cluster {int(cid) + 1}: p-value (FDR-corrected)" if cid != -1 else "Cluster -1: p-value (FDR-corrected)"
+                if p_fdr_col not in var_row.columns:
+                    p_fdr_col = f"Cluster {cid}: p-value (FDR-corrected)"
 
             if p_raw_col in var_row.columns:
                 val = var_row[p_raw_col].values[0]
@@ -1928,29 +2031,32 @@ def plot_cluster_heatmap(
     ylabel: Optional[str] = None,
     xlabel: Optional[str] = None,) -> None:
     """
-    Generates a multi-column heatmap of attribute prevalence across clusters,
+    Generates a multi-column publication heatmap of attribute prevalence and 1-10 Likert scores across clusters,
     featuring a population reference column and cluster-specific gradient color scales.
+    
+    Color intensity / heat:
+    - Percentage variables (0-100%): Saturation proportional to reported percentage (vmin=0, vmax=100).
+    - 1-10 Likert scores: Scaled to 0-100% heat intensity (score * 10), where 10 has maximum heat (100%)
+      and 1 has lowest heat (~10%, weakly colored tint).
     """
     output_dir = _resolve_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     name_map = load_name_map(name_map_path)
     cluster_config = load_cluster_config(cluster_config_path)
 
-    print(f"\n[Heatmap] Generating prevalence heatmap for {len(variables)} variables...")
+    print(f"\n[Heatmap] Generating prevalence & Likert heatmap for {len(variables)} variables...")
 
     prevalence_data = []
-    sig_map_raw: Dict[str, Dict[int, float]] = {}
-    sig_map_fdr: Dict[str, Dict[int, float]] = {}
 
     cluster_cols = [
         c for c in results_df.columns
         if (": Mean" in c or ": Mean/N" in c) and "Whole population" not in c
     ]
-    cluster_id_map: Dict[str, int] = {}
+    # Map column headers to canonical cluster label (e.g. 'Cluster 1', 'Cluster 2', ...)
+    cluster_label_map: Dict[str, str] = {}
     for col in cluster_cols:
-        c_id = _parse_cluster_column_header(col, cluster_config)
-        if c_id is not None:
-            cluster_id_map[col] = c_id
+        c_label = col.split(":")[0].strip()
+        cluster_label_map[col] = c_label
 
     for _, row in results_df.iterrows():
         v_display = row["Variable"]
@@ -1965,75 +2071,99 @@ def plot_cluster_heatmap(
         if raw_var is None:
             continue
 
-        sig_map_raw[raw_var] = {}
-        sig_map_fdr[raw_var] = {}
-
-        # Population prevalence
-        pop_str = str(row.get("Whole population: Mean (±SD) / N (%)", ""))
-        pop_pct = _extract_percentage_from_table_cell(pop_str)
-        try:
-            pop_n = int(pop_str.split("(")[0].strip())
-        except Exception:
-            pop_n = 0
+        # Population benchmark column
+        pop_str = str(row.get("Whole population: Mean (±SD) / N (%)", "")).strip()
+        if "%" in pop_str:
+            pop_pct = _extract_percentage_from_table_cell(pop_str)
+            try:
+                pop_n = int(float(pop_str.split("(")[0].strip()))
+            except Exception:
+                pop_n = 0
+            pop_heat = pop_pct if pd.notna(pop_pct) else 0.0
+            pop_txt = f"{pop_n} ({pop_pct:.1f}%)" if pd.notna(pop_pct) else ""
+        else:
+            pop_mean, pop_sd = _extract_mean_sd_from_table_cell(pop_str)
+            # Map 1-10 Likert score to 0-100 heat intensity: 10 has highest (100%), 1 has lowest (10%)
+            pop_heat = np.clip(pop_mean * 10.0, 0.0, 100.0) if pop_mean is not None else 0.0
+            if pop_sd is not None:
+                pop_txt = f"{pop_mean:.1f} (±{pop_sd:.1f})"
+            elif pop_mean is not None:
+                pop_txt = f"{pop_mean:.1f}"
+            else:
+                pop_txt = ""
 
         prevalence_data.append({
             "variable": raw_var,
-            "cluster_id": "Population",
-            "prevalence_%": pop_pct if pd.notna(pop_pct) else 0.0,
-            "n": pop_n,
+            "cluster_label": "Whole population",
+            "heat": pop_heat,
+            "text": pop_txt,
         })
 
-        for col, cid in cluster_id_map.items():
-            c_str = str(row.get(col, ""))
-            pct = _extract_percentage_from_table_cell(c_str)
-            try:
-                cnt = int(c_str.split("(")[0].strip())
-            except Exception:
-                cnt = 0
+        # Cluster columns
+        for col, c_label in cluster_label_map.items():
+            c_str = str(row.get(col, "")).strip()
+            if "%" in c_str:
+                pct = _extract_percentage_from_table_cell(c_str)
+                try:
+                    cnt = int(float(c_str.split("(")[0].strip()))
+                except Exception:
+                    cnt = 0
+                c_heat = pct if pd.notna(pct) else 0.0
+                c_base_txt = f"{cnt} ({pct:.1f}%)" if pd.notna(pct) else ""
+            else:
+                c_mean, c_sd = _extract_mean_sd_from_table_cell(c_str)
+                # Map 1-10 Likert score to 0-100 heat intensity: 10 has highest (100%), 1 has lowest (10%)
+                c_heat = np.clip(c_mean * 10.0, 0.0, 100.0) if c_mean is not None else 0.0
+                if c_sd is not None:
+                    c_base_txt = f"{c_mean:.1f} (±{c_sd:.1f})"
+                elif c_mean is not None:
+                    c_base_txt = f"{c_mean:.1f}"
+                else:
+                    c_base_txt = ""
+
+            # Check significance p-values
+            p_r_col = f"{c_label}: p-value"
+            p_f_col = f"{c_label}: p-value (FDR-corrected)"
+            p_f = None
+            p_r = None
+            if p_f_col in row and pd.notna(row[p_f_col]):
+                try:
+                    p_f = float(row[p_f_col])
+                except ValueError:
+                    pass
+            if p_r_col in row and pd.notna(row[p_r_col]):
+                try:
+                    p_r = float(row[p_r_col])
+                except ValueError:
+                    pass
+
+            sig_str = ""
+            if p_f is not None and p_f < alpha:
+                sig_str = "**"
+            elif p_r is not None and p_r < alpha:
+                sig_str = "*"
 
             prevalence_data.append({
                 "variable": raw_var,
-                "cluster_id": cid,
-                "prevalence_%": pct if pd.notna(pct) else 0.0,
-                "n": cnt,
+                "cluster_label": c_label,
+                "heat": c_heat,
+                "text": f"{c_base_txt}{sig_str}" if c_base_txt else "",
             })
 
-            c_label = get_cluster_label(cid, cluster_config)
-            p_r_col = f"{c_label}: p-value"
-            p_f_col = f"{c_label}: p-value (FDR-corrected)"
-            if p_r_col in row and pd.notna(row[p_r_col]):
-                try:
-                    sig_map_raw[raw_var][cid] = float(row[p_r_col])
-                except ValueError:
-                    pass
-            if p_f_col in row and pd.notna(row[p_f_col]):
-                try:
-                    sig_map_fdr[raw_var][cid] = float(row[p_f_col])
-                except ValueError:
-                    pass
-
     if not prevalence_data:
-        print("  Warning: No prevalence data available for heatmap.")
+        print("  Warning: No prevalence or score data available for heatmap.")
         return
 
     prev_df = pd.DataFrame(prevalence_data)
-    matrix = prev_df.pivot(index="variable", columns="cluster_id", values="prevalence_%")
-    n_matrix = prev_df.pivot(index="variable", columns="cluster_id", values="n")
+    heat_matrix = prev_df.pivot(index="variable", columns="cluster_label", values="heat")
+    text_matrix = prev_df.pivot(index="variable", columns="cluster_label", values="text")
 
-    cols = ["Population"] + [c for c in matrix.columns if c != "Population"]
-    matrix = matrix[cols].reindex(variables)
-    n_matrix = n_matrix[cols].reindex(variables)
-
-    cluster_headers = []
-    for cid in matrix.columns:
-        if cid == "Population":
-            cluster_headers.append("Whole population")
-        else:
-            cluster_headers.append(get_cluster_label(cid, cluster_config))
+    ordered_cols = ["Whole population"] + [c for c in cluster_label_map.values() if c in heat_matrix.columns]
+    heat_matrix = heat_matrix[ordered_cols].reindex(variables)
+    text_matrix = text_matrix[ordered_cols].reindex(variables)
 
     row_labels = [get_nice_name(v, name_map) for v in variables]
-
-    n_cols = len(matrix.columns)
+    n_cols = len(ordered_cols)
     n_rows = len(variables)
 
     fig, axes = plt.subplots(
@@ -2044,35 +2174,22 @@ def plot_cluster_heatmap(
     if n_cols == 1:
         axes = [axes]
 
-    for j, (cid, ax) in enumerate(zip(matrix.columns, axes)):
-        col_data = matrix.iloc[:, j:j + 1].values
+    for j, (c_label, ax) in enumerate(zip(ordered_cols, axes)):
+        col_heat = heat_matrix.iloc[:, j:j + 1].values
 
-        if cid == "Population":
+        if c_label == "Whole population":
             cmap = LinearSegmentedColormap.from_list("pop", ["white", "#4D4D4D"])
         else:
-            color = get_cluster_color(cid, cluster_config, DEFAULT_PALETTE)
-            cmap = LinearSegmentedColormap.from_list(f"cluster_{cid}", ["white", color])
+            color = get_cluster_color(c_label, cluster_config, DEFAULT_PALETTE)
+            cmap = LinearSegmentedColormap.from_list(f"cluster_{j}", ["white", color])
 
-        ax.imshow(col_data, cmap=cmap, vmin=0, vmax=100, aspect="auto")
+        ax.imshow(col_heat, cmap=cmap, vmin=0, vmax=100, aspect="auto")
 
         for i in range(n_rows):
-            pct_val = matrix.iloc[i, j]
-            n_val = n_matrix.iloc[i, j]
-            v_name = variables[i]
+            cell_txt = text_matrix.iloc[i, j]
+            ax.text(0, i, cell_txt if pd.notna(cell_txt) else "", ha="center", va="center", fontsize=11, weight="normal")
 
-            sig_str = ""
-            if cid != "Population":
-                p_f = sig_map_fdr.get(v_name, {}).get(cid)
-                p_r = sig_map_raw.get(v_name, {}).get(cid)
-                if p_f is not None and p_f < alpha:
-                    sig_str = "**"
-                elif p_r is not None and p_r < alpha:
-                    sig_str = "*"
-
-            cell_txt = f"{int(n_val)} ({pct_val:.1f}%){sig_str}" if pd.notna(pct_val) else ""
-            ax.text(0, i, cell_txt, ha="center", va="center", fontsize=11, weight="normal")
-
-        ax.set_xlabel(cluster_headers[j], fontsize=14, rotation=45, ha="right")
+        ax.set_xlabel(c_label, fontsize=14, rotation=45, ha="right")
         ax.set_xticks([])
         ax.set_yticks(range(n_rows))
         ax.tick_params(axis="both", length=0)
@@ -2486,10 +2603,17 @@ def run_cluster_comparison_pipeline(
             os.makedirs(out_d, exist_ok=True)
             print(f"\n[Figure Suite] Generating full publication figure set in: '{out_d}'...")
 
-            # 1. Multi-attribute Prevalence Heatmap
+            # 1. Multi-attribute Prevalence & Likert Heatmap (WGCs + 3 bin EBs + 3 Likert EBs)
             wgc_vars = [v for v in DEFAULT_VARIABLE_DOMAINS["Weight gain causes"] if v in merged_df.columns]
             eb_bin_vars = [v for v in ["hunger_yn", "satiety_yn", "emotional_eating_yn"] if v in merged_df.columns]
-            heatmap_vars = wgc_vars + eb_bin_vars
+            eb_likert_vars = [
+                v for v in [
+                    "emotional_eating_value_likert",
+                    "quantity_control_likert",
+                    "impulse_control_likert",
+                ] if v in merged_df.columns
+            ]
+            heatmap_vars = wgc_vars + eb_bin_vars + eb_likert_vars
             if heatmap_vars:
                 plot_cluster_heatmap(
                     results_df=results_df,

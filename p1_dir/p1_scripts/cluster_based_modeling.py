@@ -77,27 +77,6 @@ plt.style.use("seaborn-v0_8-whitegrid")
 # DEFAULT CONSTANTS & COLOR PALETTES
 # =============================================================================
 
-DEFAULT_CLUSTER_COLORS = [
-    "#1f77b4",  # Blue
-    "#ff7f0e",  # Orange
-    "#2ca02c",  # Green
-    "#d62728",  # Red
-    "#9467bd",  # Purple
-    "#8c564b",  # Brown
-    "#e377c2",  # Pink
-    "#7f7f7f",  # Gray
-    "#bcbd22",  # Yellow-green
-    "#17becf",  # Teal
-]
-
-POPULATION_COLOR = "#D62728"  # High-contrast red for whole population benchmark
-NEUTRAL_GRAY = "#7F7F7F"      # Gray for background individual trajectories
-
-
-# =============================================================================
-# PATH & CONFIGURATION RESOLUTION HELPERS
-# =============================================================================
-
 def _resolve_path(path: str) -> str:
     """
     Resolves relative file paths to absolute paths, checking script directory
@@ -115,36 +94,90 @@ def _resolve_path(path: str) -> str:
     return candidate1
 
 
+def _load_default_cluster_palette() -> List[str]:
+    """Loads default 10-color publication palette from cluster_color_dict.json if available."""
+    fallback_palette = [
+        "#1f77b4",  # Cluster 1: Blue
+        "#ff7f0e",  # Cluster 2: Orange
+        "#2ca02c",  # Cluster 3: Green
+        "#d62728",  # Cluster 4: Red
+        "#9467bd",  # Cluster 5: Purple
+        "#8c564b",  # Cluster 6: Brown
+        "#e377c2",  # Cluster 7: Pink
+        "#7f7f7f",  # Cluster 8: Gray
+        "#bcbd22",  # Cluster 9: Olive / Yellow-green
+        "#17becf",  # Cluster 10: Teal
+    ]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, "cluster_color_dict.json"),
+        os.path.join(os.getcwd(), "cluster_color_dict.json"),
+        os.path.join(os.getcwd(), "p1_dir", "p1_scripts", "cluster_color_dict.json"),
+    ]
+    for c_path in candidates:
+        if os.path.exists(c_path):
+            try:
+                with open(c_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                c_dict = data.get("cluster_colors", data)
+                palette = []
+                for i in range(1, 11):
+                    col = c_dict.get(str(i), c_dict.get(f"Cluster {i}", fallback_palette[i - 1]))
+                    palette.append(col)
+                return palette
+            except Exception:
+                pass
+    return fallback_palette
+
+
+DEFAULT_CLUSTER_COLORS = _load_default_cluster_palette()
+
+POPULATION_COLOR = "#D62728"  # High-contrast red for whole population benchmark
+NEUTRAL_GRAY = "#7F7F7F"      # Gray for background individual trajectories
+
+
+# =============================================================================
+# PATH & CONFIGURATION RESOLUTION HELPERS
+# =============================================================================
+
 def load_cluster_config(config_source: Optional[Union[str, Dict]] = None) -> Dict[str, Any]:
     """
     Loads custom cluster labels and colors from a dictionary or JSON file.
-
-    Parameters:
-    -----------
-    config_source : Optional[Union[str, Dict]]
-        Path to cluster config JSON or dictionary.
-
-    Returns:
-    --------
-    Dict[str, Any]: Dictionary containing 'cluster_labels' and 'cluster_colors'.
+    Automatically merges fixed colors from cluster_color_dict.json by default.
     """
-    config = {"cluster_labels": {}, "cluster_colors": {}}
+    config: Dict[str, Any] = {"cluster_labels": {}, "cluster_colors": {}}
+
+    # Load base colors from cluster_color_dict.json
+    default_json = _resolve_path("cluster_color_dict.json")
+    if os.path.exists(default_json):
+        try:
+            with open(default_json, "r", encoding="utf-8") as f:
+                d_colors = json.load(f)
+            config["cluster_colors"].update(d_colors.get("cluster_colors", d_colors))
+        except Exception:
+            pass
+
     if config_source is None:
         return config
 
     if isinstance(config_source, dict):
-        config["cluster_labels"] = config_source.get("cluster_labels", config_source)
-        config["cluster_colors"] = config_source.get("cluster_colors", {})
+        if "cluster_colors" in config_source:
+            config["cluster_colors"].update(config_source["cluster_colors"])
+        if "cluster_labels" in config_source:
+            config["cluster_labels"].update(config_source["cluster_labels"])
         return config
 
     if isinstance(config_source, str):
-        json_path = _resolve_path(config_source)
+        target = config_source
+        if not target.endswith(".json") and os.path.exists(_resolve_path(f"{target}.json")):
+            target = f"{target}.json"
+        json_path = _resolve_path(target)
         if os.path.exists(json_path):
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                config["cluster_labels"] = data.get("cluster_labels", {})
-                config["cluster_colors"] = data.get("cluster_colors", {})
+                config["cluster_labels"].update(data.get("cluster_labels", {}))
+                config["cluster_colors"].update(data.get("cluster_colors", data))
                 print(f"[Config] Loaded cluster configuration from: '{json_path}'")
             except Exception as e:
                 print(f"Warning: Failed to parse cluster config JSON '{json_path}': {e}")
@@ -152,25 +185,54 @@ def load_cluster_config(config_source: Optional[Union[str, Dict]] = None) -> Dic
 
 
 def get_cluster_label(cluster_id: int, cluster_config: Optional[Dict[str, Any]] = None) -> str:
-    """Returns human-readable cluster label, falling back to 'Cluster {id}'."""
+    """Returns human-readable cluster label, falling back to 1-indexed 'Cluster {id + 1}'."""
     if cluster_config:
         labels = cluster_config.get("cluster_labels", {})
         if str(cluster_id) in labels:
             return labels[str(cluster_id)]
         if cluster_id in labels:
             return labels[cluster_id]
-    return f"Cluster {cluster_id}"
+    try:
+        cid_int = int(cluster_id)
+        if cid_int == -1:
+            return "Noise / Outliers"
+        return f"Cluster {cid_int + 1}"
+    except (ValueError, TypeError):
+        return f"Cluster {cluster_id}"
 
 
-def get_cluster_color(cluster_id: int, cluster_config: Optional[Dict[str, Any]] = None) -> str:
-    """Returns cluster-specific hex color code, falling back to default palette."""
-    if cluster_config:
-        colors = cluster_config.get("cluster_colors", {})
-        if str(cluster_id) in colors:
-            return colors[str(cluster_id)]
-        if cluster_id in colors:
-            return colors[cluster_id]
-    return DEFAULT_CLUSTER_COLORS[int(cluster_id) % len(DEFAULT_CLUSTER_COLORS)]
+def get_cluster_color(cluster_id: Union[int, str], cluster_config: Optional[Dict[str, Any]] = None) -> str:
+    """Returns cluster-specific hex color code from fixed cluster_color_dict or default palette."""
+    if cluster_config is None:
+        cluster_config = load_cluster_config(None)
+
+    colors = cluster_config.get("cluster_colors", {}) if cluster_config else {}
+
+    # 1. Match via human-readable label (e.g. 0-indexed DB ID 0 -> 'Cluster 1')
+    c_lbl = get_cluster_label(cluster_id, cluster_config)
+    if c_lbl in colors:
+        return colors[c_lbl]
+
+    # 2. Match via direct string representation
+    str_id = str(cluster_id)
+    if str_id in colors:
+        return colors[str_id]
+    if cluster_id in colors:
+        return colors[cluster_id]
+
+    # 3. Numeric conversion & fallback
+    try:
+        cid_int = int(cluster_id)
+        if cid_int == -1:
+            return "#7f7f7f"
+        return DEFAULT_CLUSTER_COLORS[cid_int % len(DEFAULT_CLUSTER_COLORS)]
+    except (ValueError, TypeError):
+        match = re.search(r"(\d+)", str_id)
+        if match:
+            c_num = int(match.group(1))
+            if c_num >= 1:
+                return DEFAULT_CLUSTER_COLORS[(c_num - 1) % len(DEFAULT_CLUSTER_COLORS)]
+        return "#7f7f7f"
 
 
 # =============================================================================
@@ -894,7 +956,7 @@ def fit_trajectory_mixed_model(
         coding_str = "Deviation Coding (contrasts vs. Grand Mean)"
         cluster_term = "C(cluster_id, Sum)"
     else:
-        coding_str = f"Reference Coding (vs. Cluster {reference_cluster})"
+        coding_str = f"Reference Coding (vs. Cluster {reference_cluster + 1})"
         cats = sorted(df_model["cluster_id"].cat.categories)
         if reference_cluster in cats:
             cats.remove(reference_cluster)
@@ -1106,7 +1168,7 @@ def analyze_trajectory_mixed_model(
                 except Exception:
                     stat_c, pval_c = np.nan, np.nan
         else:
-            contrast_type = f"vs. Cluster {reference_cluster}"
+            contrast_type = f"vs. {get_cluster_label(reference_cluster, cluster_config)}"
             if cid == reference_cluster:
                 stat_c, pval_c = np.nan, np.nan
             else:
