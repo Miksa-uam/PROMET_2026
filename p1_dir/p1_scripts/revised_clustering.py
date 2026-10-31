@@ -631,10 +631,9 @@ def plot_clustering_evaluation_profiles(
     Layout: 2 rows x 3 columns (3 on top, 2 on bottom, 6th cell hidden).
     Panel order:
       1. Silhouette Score (Higher is Better)
-      2. Davies-Bouldin Index (Lower is Better)
-      3. Calinski-Harabasz Index (Higher is Better)
-      4. Total Cluster Inertia (Elbow Method — Lower is Better)
-      5. Subsampling Stability ARI (Higher is Better)
+      2. Subsampling Stability ARI (Higher is Better)
+      NOTE: Do NOT compute Calinski-Harabasz and Davies-Bouldin indices and Inertia, 
+      because these all assume continuous data in an Euclidean space. 
     Safely overwrites any existing file.
     """
     algorithms = performance_df["algorithm"].unique()
@@ -671,74 +670,17 @@ def plot_clustering_evaluation_profiles(
     ax1.grid(True, linestyle="--", alpha=0.4)
     ax1.legend(fontsize=8, loc="lower right")
 
-    # Row 1, Col 1: Panel 2 - Davies-Bouldin Index (Lower is Better)
+    # Row 1, Col 1: Panel 2 - Subsampling Stability ARI (Higher is Better)
     ax2 = axes[0, 1]
     for algo in algorithms:
         style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
         for tbl in tables:
             sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
-            if len(sub) == 0 or sub["davies_bouldin_mds"].isna().all():
-                continue
-            color = table_colors[tbl]
-            lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
-            ax2.plot(sub["k"], sub["davies_bouldin_mds"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
-
-    ax2.set_title("B. Davies-Bouldin Index (10D MDS)\n(Lower is Better)", fontsize=11, fontweight="bold")
-    ax2.set_xlabel("Number of Clusters (k)", fontsize=10)
-    ax2.set_ylabel("Davies-Bouldin Index", fontsize=10)
-    ax2.set_xticks(performance_df["k"].unique())
-    ax2.grid(True, linestyle="--", alpha=0.4)
-    ax2.legend(fontsize=8, loc="upper right")
-
-    # Row 1, Col 2: Panel 3 - Calinski-Harabasz Index (Higher is Better)
-    ax3 = axes[0, 2]
-    for algo in algorithms:
-        style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
-        for tbl in tables:
-            sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
-            if len(sub) == 0 or sub["calinski_harabasz_mds"].isna().all():
-                continue
-            color = table_colors[tbl]
-            lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
-            ax3.plot(sub["k"], sub["calinski_harabasz_mds"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
-
-    ax3.set_title("C. Calinski-Harabasz Index (10D MDS)\n(Higher is Better)", fontsize=11, fontweight="bold")
-    ax3.set_xlabel("Number of Clusters (k)", fontsize=10)
-    ax3.set_ylabel("Calinski-Harabasz Score", fontsize=10)
-    ax3.set_xticks(performance_df["k"].unique())
-    ax3.grid(True, linestyle="--", alpha=0.4)
-    ax3.legend(fontsize=8, loc="upper right")
-
-    # Row 2, Col 0: Panel 4 - Total Cluster Inertia (Elbow Method — Lower is Better)
-    ax4 = axes[1, 0]
-    for algo in algorithms:
-        style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
-        for tbl in tables:
-            sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
             if len(sub) == 0:
                 continue
             color = table_colors[tbl]
             lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
-            ax4.plot(sub["k"], sub["inertia"], marker=style["marker"], linestyle=style["linestyle"], color=color, label=lbl, alpha=0.85)
-
-    ax4.set_title("D. Total Cluster Inertia (Elbow Method)\n(Sum of Distances to Medoids — Lower is Better)", fontsize=11, fontweight="bold")
-    ax4.set_xlabel("Number of Clusters (k)", fontsize=10)
-    ax4.set_ylabel("Inertia", fontsize=10)
-    ax4.set_xticks(performance_df["k"].unique())
-    ax4.grid(True, linestyle="--", alpha=0.4)
-    ax4.legend(fontsize=8, loc="upper right")
-
-    # Row 2, Col 1: Panel 5 - Subsampling Stability ARI (Higher is Better)
-    ax5 = axes[1, 1]
-    for algo in algorithms:
-        style = algo_styles.get(algo, {"marker": "o", "linestyle": "-", "name": algo})
-        for tbl in tables:
-            sub = performance_df[(performance_df["algorithm"] == algo) & (performance_df["distance_table"] == tbl)].sort_values("k")
-            if len(sub) == 0:
-                continue
-            color = table_colors[tbl]
-            lbl = f"{style['name']} [{tbl.replace('hybrid_', '')}]"
-            ax5.errorbar(
+            ax2.errorbar(
                 sub["k"],
                 sub["stability_ari_mean"],
                 yerr=sub["stability_ari_std"],
@@ -750,31 +692,13 @@ def plot_clustering_evaluation_profiles(
                 alpha=0.85,
             )
 
-    ax5.axhline(0.75, color="red", linestyle=":", linewidth=1.5, label="High Stability Threshold (0.75)")
-    ax5.set_title("E. Subsampling Stability (Adjusted Rand Index)\n(80% Subsampling Without Replacement — 100 Iterations)", fontsize=11, fontweight="bold")
-    ax5.set_xlabel("Number of Clusters (k)", fontsize=10)
-    ax5.set_ylabel("Mean Adjusted Rand Index (ARI)", fontsize=10)
-    ax5.set_xticks(performance_df["k"].unique())
-    ax5.grid(True, linestyle="--", alpha=0.4)
-    ax5.legend(fontsize=8, loc="lower right")
-
-    # Row 2, Col 2: Panel 6 - Consolidated Legend Box
-    axes[1, 2].axis("off")
-    h1, l1 = ax1.get_legend_handles_labels()
-    h5, l5 = ax5.get_legend_handles_labels()
-    by_label = dict(zip(l1 + l5, h1 + h5))
-    if by_label:
-        axes[1, 2].legend(
-            by_label.values(),
-            by_label.keys(),
-            loc="center",
-            title="Algorithm & Distance Table",
-            title_fontsize=10,
-            fontsize=8.5,
-            frameon=True,
-            facecolor="#fdfdfd",
-            edgecolor="#d0d0d0",
-        )
+    ax2.axhline(0.75, color="red", linestyle=":", linewidth=1.5, label="High Stability Threshold (0.75)")
+    ax2.set_title("E. Subsampling Stability (Adjusted Rand Index)\n(80% Subsampling Without Replacement — 100 Iterations)", fontsize=11, fontweight="bold")
+    ax2.set_xlabel("Number of Clusters (k)", fontsize=10)
+    ax2.set_ylabel("Mean Adjusted Rand Index (ARI)", fontsize=10)
+    ax2.set_xticks(performance_df["k"].unique())
+    ax2.grid(True, linestyle="--", alpha=0.4)
+    ax2.legend(fontsize=8, loc="lower right")
 
     plt.suptitle("Multi-Algorithm Cluster Validity & Stability Comparison", fontsize=14, y=0.99)
     plt.tight_layout()

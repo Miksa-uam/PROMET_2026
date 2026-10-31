@@ -1415,7 +1415,7 @@ def plot_lmm_predicted_trajectories(
 
     metric_name = "Percentage Weight Loss" if use_pct else "Weight"
     ylabel = "Predicted Weight Loss (%)" if use_pct else "Predicted Body Weight (kg)"
-    legend_loc = "lower left" if use_pct else "upper right"
+    legend_loc = "upper right"
 
     # Title & Subtitle with statistical test results
     if annotate_statistics and stats_summary is not None:
