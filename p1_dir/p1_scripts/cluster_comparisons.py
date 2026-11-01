@@ -41,7 +41,8 @@ This module implements a descriptive framework for comparing clusters:
 2. Comprehensive Visualization Suite:
    - Violin plots (continuous variables) with medians, IQR, and significance asterisks.
    - Stacked bar charts (categorical variables, 0-100%) with cohort average lines.
-   - Lollipop plots (multi-variable deviations from cohort mean in %).
+   - Lollipop plots (unified two-panel Standardized Mean Differences [Cohen's d] for continuous
+     variables and Risk Differences [RD] for categorical variables vs. Rest-of-Cohort, sharing a 0 parity midline).
    - Heatmaps with cluster-specific color scales and population reference column.
    - Forest plots (Risk Ratios and Risk Differences with 95% CIs for binary clinical outcomes).
    - Multi-panel clinical summary grid (6-panel cohort overview).
@@ -80,7 +81,9 @@ Pseudocode:
       medians, and asterisks (* / **).
    b. Categorical variables: 100% stacked bar charts showing presence/absence proportions,
       population benchmark line, N (%) annotations, and asterisks.
-   c. Deviations from cohort mean: Lollipop plot displaying relative percentage difference (%).
+   c. Deviations from rest-of-cohort: Lollipop plot displaying Standardized Mean Differences (Cohen's d)
+      for continuous variables and Risk Differences (RD in percentage points) for categorical variables
+      sharing a common 0 parity midline.
    d. Multi-attribute profiles: Heatmap with cluster-specific color scales and population reference.
    e. Prospective outcomes: Forest plots of Risk Ratios (RR) and Risk Differences (RD) with 95% CIs.
    f. Summary Grid: 6-panel overview of cohort demographics, BMI, follow-up, and weight loss.
@@ -871,6 +874,197 @@ def apply_fdr_correction(pvalues: Dict[int, float]) -> Dict[int, float]:
         return dict(zip(keys, [float(c) for c in corrected]))
     except Exception:
         return pvalues
+
+
+def calculate_cohens_d_vs_rest(
+    cluster_df: pd.DataFrame,
+    variable: str,
+    cluster_col: str = "cluster_id",) -> Dict[int, Dict[str, float]]:
+    """
+    Calculates Standardized Mean Differences (Cohen's d) for a continuous variable
+    comparing each cluster against the remaining cohort (Rest-of-Cohort).
+
+    Statistical Methodology:
+    ------------------------
+    Let cluster C have sample size n_C, mean m_C, and sample variance s_C^2.
+    Let the remaining cohort R (all patients where cluster != C and cluster != -1)
+    have sample size n_R, mean m_R, and sample variance s_R^2.
+
+    Pooled standard deviation:
+        s_pooled = sqrt( ((n_C - 1) * s_C^2 + (n_R - 1) * s_R^2) / (n_C + n_R - 2) )
+
+    Cohen's d:
+        d = (m_C - m_R) / s_pooled
+
+    Interpretation:
+        - d = 0 represents exact parity between the cluster and the rest-of-cohort.
+        - Positive values (d > 0) indicate scores above the remaining cohort.
+        - Negative values (d < 0) indicate scores below the remaining cohort.
+        - Effect sizes follow standard benchmarks: |d| ~ 0.2 (small), 0.5 (medium), 0.8 (large).
+
+    Statistical Significance:
+        - Two-sample non-parametric Mann-Whitney U test between cluster C and rest-of-cohort R.
+        - Benjamini-Hochberg (BH) False Discovery Rate (FDR) adjustment across all clusters.
+
+    Parameters:
+    -----------
+    cluster_df : pd.DataFrame
+        Cohort dataframe with standardized cluster assignments.
+    variable : str
+        Continuous variable column name.
+    cluster_col : str
+        Cluster assignment column (default: 'cluster_id').
+
+    Returns:
+    --------
+    Dict[int, Dict[str, float]]:
+        Mapping from cluster_id to dictionary containing:
+        - 'd': Standardized Mean Difference (Cohen's d)
+        - 'p_raw': Two-sided Mann-Whitney U p-value vs Rest-of-Cohort
+        - 'p_fdr': Benjamini-Hochberg FDR-adjusted q-value
+        - 'mean_cluster': Mean in cluster C
+        - 'mean_rest': Mean in rest-of-cohort R
+        - 'sd_pooled': Pooled standard deviation
+    """
+    clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
+    results: Dict[int, Dict[str, float]] = {}
+    raw_p_map: Dict[int, float] = {}
+
+    for cid in clusters:
+        c_vals = cluster_df[cluster_df[cluster_col] == cid][variable].dropna()
+        r_vals = cluster_df[(cluster_df[cluster_col] != cid) & (cluster_df[cluster_col] != -1)][variable].dropna()
+
+        nc, nr = len(c_vals), len(r_vals)
+        if nc < 2 or nr < 2:
+            results[cid] = {
+                "d": 0.0,
+                "p_raw": 1.0,
+                "p_fdr": 1.0,
+                "mean_cluster": float(c_vals.mean()) if nc > 0 else np.nan,
+                "mean_rest": float(r_vals.mean()) if nr > 0 else np.nan,
+                "sd_pooled": np.nan,
+            }
+            raw_p_map[cid] = 1.0
+            continue
+
+        mc, mr = float(c_vals.mean()), float(r_vals.mean())
+        vc, vr = float(c_vals.var(ddof=1)), float(r_vals.var(ddof=1))
+
+        # Pooled sample standard deviation
+        s_pooled = float(np.sqrt(((nc - 1) * vc + (nr - 1) * vr) / (nc + nr - 2)))
+        d_val = float((mc - mr) / s_pooled) if s_pooled > 0 else 0.0
+
+        p_raw = mann_whitney_u_test(c_vals, r_vals)
+        raw_p_map[cid] = p_raw
+
+        results[cid] = {
+            "d": d_val,
+            "p_raw": p_raw,
+            "mean_cluster": mc,
+            "mean_rest": mr,
+            "sd_pooled": s_pooled,
+        }
+
+    fdr_map = apply_fdr_correction(raw_p_map)
+    for cid in clusters:
+        results[cid]["p_fdr"] = fdr_map.get(cid, results[cid]["p_raw"])
+
+    return results
+
+
+def calculate_risk_difference_vs_rest(
+    cluster_df: pd.DataFrame,
+    variable: str,
+    cluster_col: str = "cluster_id",
+    as_percent: bool = True,) -> Dict[int, Dict[str, float]]:
+    """
+    Calculates Risk Differences (RD) for a binary variable comparing each cluster
+    against the remaining cohort (Rest-of-Cohort).
+
+    Statistical Methodology:
+    ------------------------
+    Let cluster C have event prevalence p_C = events_C / n_C.
+    Let the remaining cohort R (where cluster != C and cluster != -1) have
+    event prevalence p_R = events_R / n_R.
+
+    Risk Difference:
+        RD = p_C - p_R  (or expressed in percentage points: (p_C - p_R) * 100)
+
+    Interpretation:
+        - RD = 0 represents exact parity between cluster and the rest-of-cohort.
+        - Positive values (RD > 0) indicate higher event rate in the cluster.
+        - Negative values (RD < 0) indicate lower event rate in the cluster.
+
+    Statistical Significance:
+        - Two-sided Chi-squared test with Fisher's exact test fallback for small cell counts.
+        - Benjamini-Hochberg (BH) False Discovery Rate (FDR) adjustment across all clusters.
+
+    Parameters:
+    -----------
+    cluster_df : pd.DataFrame
+        Cohort dataframe with standardized cluster assignments.
+    variable : str
+        Binary/categorical variable column name (coded as 0/1, boolean, or integers).
+    cluster_col : str
+        Cluster assignment column (default: 'cluster_id').
+    as_percent : bool
+        Whether to express Risk Difference in percentage points (default: True, e.g. +15.0%).
+
+    Returns:
+    --------
+    Dict[int, Dict[str, float]]:
+        Mapping from cluster_id to dictionary containing:
+        - 'rd': Risk Difference (in percentage points if as_percent=True)
+        - 'p_raw': Two-sided Chi-squared / Fisher's exact p-value vs Rest-of-Cohort
+        - 'p_fdr': Benjamini-Hochberg FDR-adjusted q-value
+        - 'prop_cluster': Proportion in cluster C
+        - 'prop_rest': Proportion in rest-of-cohort R
+    """
+    clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
+    results: Dict[int, Dict[str, float]] = {}
+    raw_p_map: Dict[int, float] = {}
+
+    for cid in clusters:
+        c_vals = cluster_df[cluster_df[cluster_col] == cid][variable].dropna()
+        r_vals = cluster_df[(cluster_df[cluster_col] != cid) & (cluster_df[cluster_col] != -1)][variable].dropna()
+
+        nc, nr = len(c_vals), len(r_vals)
+        if nc == 0 or nr == 0:
+            results[cid] = {
+                "rd": 0.0,
+                "p_raw": 1.0,
+                "p_fdr": 1.0,
+                "prop_cluster": np.nan,
+                "prop_rest": np.nan,
+            }
+            raw_p_map[cid] = 1.0
+            continue
+
+        pos_c = float((c_vals == 1).sum() if c_vals.dtype in [bool, int, np.int64] else c_vals.sum())
+        pos_r = float((r_vals == 1).sum() if r_vals.dtype in [bool, int, np.int64] else r_vals.sum())
+
+        pc = pos_c / nc
+        pr = pos_r / nr
+
+        rd_val = pc - pr
+        if as_percent:
+            rd_val *= 100.0
+
+        p_raw = chi_squared_test(c_vals, r_vals)
+        raw_p_map[cid] = p_raw
+
+        results[cid] = {
+            "rd": float(rd_val),
+            "p_raw": p_raw,
+            "prop_cluster": float(pc),
+            "prop_rest": float(pr),
+        }
+
+    fdr_map = apply_fdr_correction(raw_p_map)
+    for cid in clusters:
+        results[cid]["p_fdr"] = fdr_map.get(cid, results[cid]["p_raw"])
+
+    return results
 
 
 def extract_pvalues_for_lollipop(
@@ -1874,136 +2068,342 @@ def _plot_single_stacked_bar(
 
 
 # =============================================================================
-# VISUALIZATION 3: MULTI-VARIABLE LOLLIPOP PLOT
+# VISUALIZATION 3: MULTI-VARIABLE LOLLIPOP PLOT (SMD & RISK DIFFERENCE VS REST)
 # =============================================================================
 
 def plot_cluster_lollipop(
     cluster_df: pd.DataFrame,
-    variables: List[str],
-    output_filename: str,
-    output_dir: str,
+    continuous_variables: Optional[List[str]] = None,
+    categorical_variables: Optional[List[str]] = None,
+    variables: Optional[List[str]] = None,
+    output_filename: str = "lollipop_plot.png",
+    output_dir: str = ".",
     cluster_col: str = "cluster_id",
     name_map_path: Optional[Union[str, Dict]] = None,
     cluster_config_path: Optional[Union[str, Dict]] = None,
-    pvalues_raw: Optional[Dict[str, Dict[int, float]]] = None,
-    pvalues_fdr: Optional[Dict[str, Dict[int, float]]] = None,
-    results_df: Optional[pd.DataFrame] = None,
+    rd_as_percent: bool = True,
     alpha: float = 0.05,
     title: Optional[str] = None,
+    xlabel_cont: Optional[str] = None,
+    xlabel_cat: Optional[str] = None,
     ylabel: Optional[str] = None,
-    xlabel: Optional[str] = None,) -> None:
+    xlabel: Optional[str] = None,
+    pvalues_raw: Optional[Dict[str, Dict[int, float]]] = None,
+    pvalues_fdr: Optional[Dict[str, Dict[int, float]]] = None,
+    results_df: Optional[pd.DataFrame] = None,) -> None:
     """
-    Generates a multi-variable horizontal lollipop plot showing percent deviations from the cohort mean.
+    Generates a unified publication-ready multi-variable lollipop plot comparing each cluster
+    to the remaining cohort (Rest-of-Cohort).
+
+    Visual & Methodological Architecture:
+    -------------------------------------
+    1. Top Section (Continuous Variables):
+       - Displays Standardized Mean Differences (Cohen's d) vs. Rest-of-Cohort.
+       - Formula: d = (mean_cluster - mean_rest) / s_pooled.
+       - A vertical solid black line at x=0 represents parity.
+       - Positive values indicate scores above the rest of the cohort; negative below.
+       - Statistical significance marked via asterisks (* raw p < alpha, ** FDR q < alpha)
+         computed from two-sample Mann-Whitney U tests vs. Rest-of-Cohort.
+
+    2. Bottom Section (Binary/Categorical Characteristics):
+       - Displays Risk Differences (RD = prop_cluster - prop_rest) vs. Rest-of-Cohort.
+       - Plotted in percentage points (%) when rd_as_percent=True.
+       - A vertical solid black line at x=0 represents parity.
+       - Statistical significance marked via asterisks (* raw p < alpha, ** FDR q < alpha)
+         computed from Chi-squared / Fisher's exact tests vs. Rest-of-Cohort.
+
+    3. Unified Layout:
+       - Both sections share a common 0 axis / vertical midline.
+       - The separation between panels is subtle and cohesive, avoiding mathematical
+         confusion while maintaining publication harmony.
+       - Cluster stems and marker heads strictly follow `cluster_color_dict.json`.
+       - Clean, 1-indexed cluster legend placed to the right.
+
+    Parameters:
+    -----------
+    cluster_df : pd.DataFrame
+        Cohort dataframe with standardized cluster assignments.
+    continuous_variables : Optional[List[str]]
+        Continuous variables to plot as SMDs (defaults to age, baseline weight, max and total weight loss).
+    categorical_variables : Optional[List[str]]
+        Binary variables to plot as Risk Differences (defaults to sex, 10% achievement, 60d dropout, 5% achievement).
+    variables : Optional[List[str]]
+        Legacy list of variables (partitioned into continuous and categorical if provided).
+    output_filename : str
+        Name of output image file (default: 'lollipop_plot.png').
+    output_dir : str
+        Directory to save figure.
+    cluster_col : str
+        Cluster assignment column (default: 'cluster_id').
+    name_map_path : Optional[Union[str, Dict]]
+        Path or dictionary mapping raw column names to display labels.
+    cluster_config_path : Optional[Union[str, Dict]]
+        Cluster display configuration.
+    rd_as_percent : bool
+        Whether to report Risk Difference in percentage points (default: True).
+    alpha : float
+        Significance threshold for asterisks (default: 0.05).
+    title : Optional[str]
+        Overall figure title.
+    xlabel_cont : Optional[str]
+        X-axis label for continuous SMD panel.
+    xlabel_cat : Optional[str]
+        X-axis label for categorical RD panel.
+    ylabel : Optional[str]
+        Optional custom Y-axis label (for legacy compatibility).
+    xlabel : Optional[str]
+        Optional general X-axis label (for legacy single-panel compatibility).
+    pvalues_raw : Optional[Dict]
+        Optional precomputed raw p-values.
+    pvalues_fdr : Optional[Dict]
+        Optional precomputed FDR-adjusted p-values.
+    results_df : Optional[pd.DataFrame]
+        Optional results dataframe for backwards compatibility.
     """
     output_dir = _resolve_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     name_map = load_name_map(name_map_path)
     cluster_config = load_cluster_config(cluster_config_path)
 
-    print(f"\n[Lollipop Plot] Generating deviation plot for {len(variables)} variables...")
+    # 1. Resolve variables
+    if continuous_variables is None and categorical_variables is None:
+        if variables is not None:
+            # Legacy call: partition supplied variables
+            continuous_variables = []
+            categorical_variables = []
+            for v in variables:
+                if v in cluster_df.columns:
+                    vtype = _infer_variable_type(cluster_df[v], variable_name=v)
+                    if vtype == "categorical":
+                        categorical_variables.append(v)
+                    else:
+                        continuous_variables.append(v)
+        else:
+            # Default clinical reporting set requested by researcher
+            continuous_variables = [
+                v for v in [
+                    "age", 
+                    "baseline_weight_kg", 
+                    "baseline_bmi", 
+                    "total_followup_days", 
+                    "days_to_nadir",
+                    "max_wl_%",
+                    "weight_regain_%", 
+                    "total_wl_%",
+                    "60d_wl_%"
+                    ]
+                if v in cluster_df.columns
+            ]
+            categorical_variables = [
+                v for v in ["sex_f", "10%_wl_achieved", "60d_dropout"]
+                if v in cluster_df.columns
+            ]
 
-    if results_df is not None and (pvalues_raw is None or pvalues_fdr is None):
-        pvalues_raw, pvalues_fdr = extract_pvalues_for_lollipop(
-            results_df=results_df,
-            variables=variables,
-            cluster_df=cluster_df,
-            cluster_col=cluster_col,
-            cluster_config_path=cluster_config_path,
-            name_map_path=name_map_path,
-        )
+    else:
+        if continuous_variables is not None:
+            continuous_variables = [v for v in continuous_variables if v in cluster_df.columns]
+        else:
+            continuous_variables = []
+        if categorical_variables is not None:
+            categorical_variables = [v for v in categorical_variables if v in cluster_df.columns]
+        else:
+            categorical_variables = []
 
     clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
-    lollipop_data = []
-
-    for var in variables:
-        if var not in cluster_df.columns:
-            continue
-        pop_mean = cluster_df[var].mean()
-        if pd.isna(pop_mean) or pop_mean == 0:
-            continue
-
-        for cid in clusters:
-            c_mean = cluster_df[cluster_df[cluster_col] == cid][var].mean()
-            if pd.notna(c_mean):
-                pct_dev = ((c_mean - pop_mean) / pop_mean) * 100.0
-                lollipop_data.append({
-                    "variable": var,
-                    "cluster_id": cid,
-                    "cluster_label": get_cluster_label(cid, cluster_config),
-                    "value": pct_dev,
-                })
-
-    if not lollipop_data:
-        print("  Warning: No data available for lollipop plot.")
+    if not clusters:
+        print("  Warning: No valid clusters found in cohort dataframe.")
         return
 
-    plot_df = pd.DataFrame(lollipop_data)
-    vars_in_plot = [v for v in variables if v in plot_df["variable"].unique()]
+    has_cont = len(continuous_variables) > 0
+    has_cat = len(categorical_variables) > 0
 
-    fig_height = max(7, len(vars_in_plot) * len(clusters) * 0.35 + 2)
-    fig, ax = plt.subplots(figsize=(14, fig_height))
+    if not has_cont and not has_cat:
+        print("  Warning: No continuous or categorical variables available for lollipop plot.")
+        return
 
-    y_pos = 0.0
-    y_ticks, y_tick_labels = [], []
+    print(f"\n[Lollipop Plot] Generating SMD & Risk Difference plot vs Rest-of-Cohort...")
+    print(f"  - Continuous Variables ({len(continuous_variables)}): {continuous_variables}")
+    print(f"  - Categorical Variables ({len(categorical_variables)}): {categorical_variables}")
 
-    for var in vars_in_plot:
-        v_sub = plot_df[plot_df["variable"] == var].copy()
-        y_range = y_pos + np.arange(len(v_sub), dtype=float)
+    # 2. Compute Cohen's d vs Rest-of-Cohort for continuous variables
+    cont_plot_rows = []
+    if has_cont:
+        for var in continuous_variables:
+            smd_metrics = calculate_cohens_d_vs_rest(cluster_df, variable=var, cluster_col=cluster_col)
+            for cid in clusters:
+                m = smd_metrics.get(cid, {"d": 0.0, "p_raw": 1.0, "p_fdr": 1.0})
+                sig_str = ""
+                if m["p_fdr"] < alpha:
+                    sig_str = "**"
+                elif m["p_raw"] < alpha:
+                    sig_str = "*"
+                cont_plot_rows.append({
+                    "variable": var,
+                    "cluster_id": cid,
+                    "value": m["d"],
+                    "sig_str": sig_str,
+                })
 
-        colors = [get_cluster_color(cid, cluster_config, DEFAULT_PALETTE) for cid in v_sub["cluster_id"]]
-        ax.hlines(y=y_range, xmin=0, xmax=v_sub["value"].values, colors=colors, linewidth=2.5, alpha=0.85)
-        ax.scatter(v_sub["value"].values, y_range, c=colors, s=70, zorder=5)
+    # 3. Compute Risk Differences vs Rest-of-Cohort for categorical variables
+    cat_plot_rows = []
+    if has_cat:
+        for var in categorical_variables:
+            rd_metrics = calculate_risk_difference_vs_rest(cluster_df, variable=var, cluster_col=cluster_col, as_percent=rd_as_percent)
+            for cid in clusters:
+                m = rd_metrics.get(cid, {"rd": 0.0, "p_raw": 1.0, "p_fdr": 1.0})
+                sig_str = ""
+                if m["p_fdr"] < alpha:
+                    sig_str = "**"
+                elif m["p_raw"] < alpha:
+                    sig_str = "*"
+                cat_plot_rows.append({
+                    "variable": var,
+                    "cluster_id": cid,
+                    "value": m["rd"],
+                    "sig_str": sig_str,
+                })
 
-        # Annotate significance markers
-        if pvalues_raw or pvalues_fdr:
+    df_cont = pd.DataFrame(cont_plot_rows) if cont_plot_rows else pd.DataFrame()
+    df_cat = pd.DataFrame(cat_plot_rows) if cat_plot_rows else pd.DataFrame()
+
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+    # Helper function to render a single lollipop panel
+    def _render_panel(
+        ax: plt.Axes,
+        panel_df: pd.DataFrame,
+        vars_list: List[str],
+        panel_title: str,
+        panel_xlabel: str,
+        is_percent: bool = False,
+    ) -> float:
+        vals = panel_df["value"].values
+        max_abs = float(np.nanmax(np.abs(vals))) if len(vals) > 0 and not np.all(np.isnan(vals)) else 1.0
+        if is_percent:
+            xlim_val = float(np.ceil(max(max_abs, 10.0) * 1.25 / 5.0) * 5.0)
+        else:
+            xlim_val = float(np.ceil(max(max_abs, 0.5) * 1.25 * 10.0) / 10.0)
+
+        ax.set_xlim(-xlim_val, xlim_val)
+        ax.axvline(x=0, color="black", linestyle="-", linewidth=1.5, zorder=3)
+
+        y_pos = 0.0
+        y_ticks, y_labels = [], []
+
+        for var in vars_list:
+            v_sub = panel_df[panel_df["variable"] == var]
+            y_range = y_pos + np.arange(len(v_sub), dtype=float)
+
             for idx, (_, r) in enumerate(v_sub.iterrows()):
                 cid = r["cluster_id"]
-                p_r = pvalues_raw.get(var, {}).get(cid) if pvalues_raw else None
-                p_f = pvalues_fdr.get(var, {}).get(cid) if pvalues_fdr else None
+                val = r["value"]
+                color = get_cluster_color(cid, cluster_config, DEFAULT_PALETTE)
+                y_coord = y_range[idx]
 
-                sig_str = ""
-                if p_f is not None and pd.notna(p_f) and p_f < alpha:
-                    sig_str = "**"
-                elif p_r is not None and pd.notna(p_r) and p_r < alpha:
-                    sig_str = "*"
+                ax.hlines(y=y_coord, xmin=0, xmax=val, colors=color, linewidth=2.5, alpha=0.85)
+                ax.scatter(val, y_coord, color=color, s=75, zorder=5)
 
+                sig_str = r.get("sig_str", "")
                 if sig_str:
-                    x_pt = r["value"]
-                    offset = 1.0 if x_pt >= 0 else -1.0
-                    align = "left" if x_pt >= 0 else "right"
-                    ax.text(x_pt + offset, y_range[idx], sig_str, ha=align, va="center", fontsize=15, weight="bold")
+                    offset = 0.02 * (2 * xlim_val)
+                    x_txt = val + offset if val >= 0 else val - offset
+                    align = "left" if val >= 0 else "right"
+                    ax.text(x_txt, y_coord, sig_str, ha=align, va="center", fontsize=14, weight="bold")
 
-        y_ticks.append(float(np.mean(y_range)))
-        y_tick_labels.append(get_nice_name(var, name_map))
+            y_ticks.append(float(np.mean(y_range)))
+            # Clean display label: remove redundant '(y/n)'
+            raw_label = get_nice_name(var, name_map)
+            cleaned_label = raw_label.replace(" (y/n)", "").replace(" (1/0)", "")
+            y_labels.append(cleaned_label)
 
-        y_pos += len(v_sub) + 0.8
-        if var != vars_in_plot[-1]:
-            ax.axhline(y=y_pos - 0.4, color="lightgray", linestyle="--", linewidth=1.0)
+            y_pos += len(v_sub) + 0.8
+            if var != vars_list[-1]:
+                ax.axhline(y=y_pos - 0.4, color="#E0E0E0", linestyle="--", linewidth=0.8)
 
-    ax.axvline(x=0, color="black", linestyle="-", linewidth=1.5)
-    ax.set_yticks(y_ticks)
-    ax.set_yticklabels(y_tick_labels, fontsize=14)
-    ax.invert_yaxis()
+        ax.set_yticks(y_ticks)
+        ax.set_yticklabels(y_labels, fontsize=13)
+        ax.invert_yaxis()
+        ax.set_title(panel_title, fontsize=13, weight="bold", loc="left", pad=10)
+        ax.set_xlabel(panel_xlabel, fontsize=12, labelpad=8)
+        ax.grid(True, axis="x", linestyle="--", alpha=0.5)
+        return xlim_val
 
-    plot_title = title if title else "Cluster-wise Deviations from Cohort Mean (%)"
-    plot_xlabel = xlabel if xlabel else "Relative Difference from Cohort Mean (%)"
-    ax.set_title(plot_title, fontsize=18, weight="bold", pad=15)
-    ax.set_xlabel(plot_xlabel, fontsize=15)
-    ax.grid(True, axis="x", linestyle="--", alpha=0.6)
+    # 4. Render Layout
+    if has_cont and has_cat:
+        h_top = max(4.0, len(continuous_variables) * len(clusters) * 0.28 + 1.2)
+        h_bottom = max(3.5, len(categorical_variables) * len(clusters) * 0.28 + 1.2)
+        fig, (ax_top, ax_bottom) = plt.subplots(
+            nrows=2, ncols=1, figsize=(14, h_top + h_bottom),
+            gridspec_kw={"height_ratios": [h_top, h_bottom], "hspace": 0.22}
+        )
 
-    # Custom legend
+        _render_panel(
+            ax=ax_top,
+            panel_df=df_cont,
+            vars_list=continuous_variables,
+            panel_title="A. Continuous Characteristics & Endpoints (Standardized Mean Difference vs. Rest-of-Cohort)",
+            panel_xlabel=xlabel_cont if xlabel_cont else "Standardized Mean Difference (Cohen's d, Parity = 0)",
+            is_percent=False,
+        )
+
+        pct_label = "percentage points, %" if rd_as_percent else "proportion"
+        _render_panel(
+            ax=ax_bottom,
+            panel_df=df_cat,
+            vars_list=categorical_variables,
+            panel_title="B. Binary Characteristics & Outcomes (Risk Difference vs. Rest-of-Cohort)",
+            panel_xlabel=xlabel_cat if xlabel_cat else f"Risk Difference vs. Rest-of-Cohort ({pct_label}; Parity = 0)",
+            is_percent=rd_as_percent,
+        )
+
+        legend_ax = ax_top
+        fig_title = title if title else "Cluster-wise Phenotypic & Outcome Deviations vs. Rest-of-Cohort"
+        fig.suptitle(fig_title, fontsize=16, weight="bold", y=0.995)
+
+    elif has_cont:
+        h_top = max(4.5, len(continuous_variables) * len(clusters) * 0.32 + 1.5)
+        fig, ax = plt.subplots(figsize=(14, h_top))
+        _render_panel(
+            ax=ax,
+            panel_df=df_cont,
+            vars_list=continuous_variables,
+            panel_title="Continuous Characteristics & Endpoints (Standardized Mean Difference vs. Rest-of-Cohort)",
+            panel_xlabel=xlabel_cont or xlabel or "Standardized Mean Difference (Cohen's d, Parity = 0)",
+            is_percent=False,
+        )
+        legend_ax = ax
+        fig_title = title if title else "Cluster-wise Standardized Mean Differences (Cohen's d vs. Rest-of-Cohort)"
+        fig.suptitle(fig_title, fontsize=16, weight="bold", y=0.995)
+
+    else:
+        h_bottom = max(4.5, len(categorical_variables) * len(clusters) * 0.32 + 1.5)
+        fig, ax = plt.subplots(figsize=(14, h_bottom))
+        pct_label = "percentage points, %" if rd_as_percent else "proportion"
+        _render_panel(
+            ax=ax,
+            panel_df=df_cat,
+            vars_list=categorical_variables,
+            panel_title="Binary Characteristics & Outcomes (Risk Difference vs. Rest-of-Cohort)",
+            panel_xlabel=xlabel_cat or xlabel or f"Risk Difference vs. Rest-of-Cohort ({pct_label}; Parity = 0)",
+            is_percent=rd_as_percent,
+        )
+        legend_ax = ax
+        fig_title = title if title else "Cluster-wise Risk Differences vs. Rest-of-Cohort"
+        fig.suptitle(fig_title, fontsize=16, weight="bold", y=0.995)
+
+    # 5. Unified Cluster Legend
     legend_handles = [
-        plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=get_cluster_color(cid, cluster_config),
+        plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=get_cluster_color(cid, cluster_config, DEFAULT_PALETTE),
                    label=get_cluster_label(cid, cluster_config), markersize=10)
         for cid in clusters
     ]
-    ax.legend(
+    legend_ax.legend(
         handles=legend_handles,
         loc="upper left",
         bbox_to_anchor=(1.02, 1.0),
         title="Clusters",
-        fontsize=13,
-        title_fontsize=14,
+        fontsize=12,
+        title_fontsize=13,
         frameon=True,
         fancybox=True,
         edgecolor="gray",
@@ -2479,7 +2879,9 @@ def run_cluster_comparison_pipeline(
     cluster_config_path: Optional[Union[str, Dict]] = None,
     alpha: float = 0.05,
     generate_plots: bool = True,
-    generate_full_figure_suite: bool = True,) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    generate_full_figure_suite: bool = True,
+    lollipop_continuous_vars: Optional[List[str]] = None,
+    lollipop_categorical_vars: Optional[List[str]] = None,) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Master driver function to execute end-to-end cluster comparisons from notebook calls.
 
@@ -2526,6 +2928,12 @@ def run_cluster_comparison_pipeline(
     generate_full_figure_suite : bool
         Whether to also automatically generate all individual granular figures
         (violins, stacked bars, lollipop, heatmap, forest) in output_dir (default: True).
+    lollipop_continuous_vars : Optional[List[str]]
+        Explicit continuous clinical variables to display on the lollipop plot (SMD vs Rest-of-Cohort).
+        Defaults to ['age', 'baseline_weight_kg', 'max_wl_%', 'total_wl_%'].
+    lollipop_categorical_vars : Optional[List[str]]
+        Explicit binary/categorical clinical variables to display on the lollipop plot (Risk Difference vs Rest-of-Cohort).
+        Defaults to ['sex_f', '10%_wl_achieved', '60d_dropout', '5%_wl_achieved'].
 
     Returns:
     --------
@@ -2625,24 +3033,33 @@ def run_cluster_comparison_pipeline(
                     alpha=alpha,
                 )
 
-            # 2. Multi-variable Lollipop Plot (Deviations from cohort mean)
-            cont_vars = [
-                v for v in [
-                    "age", "baseline_weight_kg", "baseline_bmi",
-                    "emotional_eating_value_likert", "quantity_control_likert", "impulse_control_likert",
-                    "total_wl_%", "60d_wl_%", "total_followup_days"
-                ] if v in merged_df.columns
-            ]
-            if cont_vars:
+            # 2. Multi-variable Lollipop Plot (SMD & Risk Difference vs. Rest-of-Cohort)
+            if lollipop_continuous_vars is None:
+                lp_cont = [
+                    v for v in ["age", "baseline_weight_kg", "max_wl_%", "total_wl_%"]
+                    if v in merged_df.columns
+                ]
+            else:
+                lp_cont = [v for v in lollipop_continuous_vars if v in merged_df.columns]
+
+            if lollipop_categorical_vars is None:
+                lp_cat = [
+                    v for v in ["sex_f", "10%_wl_achieved", "60d_dropout", "5%_wl_achieved"]
+                    if v in merged_df.columns
+                ]
+            else:
+                lp_cat = [v for v in lollipop_categorical_vars if v in merged_df.columns]
+
+            if lp_cont or lp_cat:
                 plot_cluster_lollipop(
                     cluster_df=merged_df,
-                    variables=cont_vars,
+                    continuous_variables=lp_cont,
+                    categorical_variables=lp_cat,
                     output_filename=f"lollipop_{db_table_name}.png",
                     output_dir=out_d,
                     cluster_col="cluster_id",
                     name_map_path=name_map_path,
                     cluster_config_path=cluster_config_path,
-                    results_df=results_df,
                     alpha=alpha,
                 )
 
