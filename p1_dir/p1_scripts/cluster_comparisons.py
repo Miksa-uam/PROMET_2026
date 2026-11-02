@@ -879,7 +879,8 @@ def apply_fdr_correction(pvalues: Dict[int, float]) -> Dict[int, float]:
 def calculate_cohens_d_vs_rest(
     cluster_df: pd.DataFrame,
     variable: str,
-    cluster_col: str = "cluster_id",) -> Dict[int, Dict[str, float]]:
+    cluster_col: str = "cluster_id",
+    use_absolute_magnitude: Optional[bool] = None,) -> Dict[int, Dict[str, float]]:
     """
     Calculates Standardized Mean Differences (Cohen's d) for a continuous variable
     comparing each cluster against the remaining cohort (Rest-of-Cohort).
@@ -896,11 +897,19 @@ def calculate_cohens_d_vs_rest(
     Cohen's d:
         d = (m_C - m_R) / s_pooled
 
-    Interpretation:
-        - d = 0 represents exact parity between the cluster and the rest-of-cohort.
-        - Positive values (d > 0) indicate scores above the remaining cohort.
-        - Negative values (d < 0) indicate scores below the remaining cohort.
-        - Effect sizes follow standard benchmarks: |d| ~ 0.2 (small), 0.5 (medium), 0.8 (large).
+    Absolute Magnitude & Directionality:
+    ------------------------------------
+    In prospective clinical databases, weight loss, fat mass reduction, and BMI reductions
+    are frequently stored as negative numbers (e.g. -10% delta from baseline).
+    If evaluated directly on raw signed negative numbers, a cluster that lost LESS weight
+    (e.g. -5%) has a higher arithmetic mean than a cluster that lost MORE weight (e.g. -12%),
+    which artificially inverts Cohen's d (making lesser weight loss appear as a positive effect).
+    
+    When `use_absolute_magnitude=True` (or auto-detected when the cohort mean < 0 or variable
+    name indicates a loss/reduction), the absolute magnitude of reduction (|x|) is evaluated:
+      - Positive Cohen's d (d > 0): Cluster achieved GREATER weight loss / reduction than Rest-of-Cohort.
+      - Negative Cohen's d (d < 0): Cluster achieved LESS weight loss / reduction than Rest-of-Cohort.
+      - Parity (d = 0): Exact equality in weight loss between cluster and Rest-of-Cohort.
 
     Statistical Significance:
         - Two-sample non-parametric Mann-Whitney U test between cluster C and rest-of-cohort R.
@@ -914,6 +923,9 @@ def calculate_cohens_d_vs_rest(
         Continuous variable column name.
     cluster_col : str
         Cluster assignment column (default: 'cluster_id').
+    use_absolute_magnitude : Optional[bool]
+        Whether to analyze absolute values (|x|). If None, automatically set to True
+        if the cohort mean is negative (< 0) or column name indicates a loss/reduction.
 
     Returns:
     --------
@@ -925,10 +937,19 @@ def calculate_cohens_d_vs_rest(
         - 'mean_cluster': Mean in cluster C
         - 'mean_rest': Mean in rest-of-cohort R
         - 'sd_pooled': Pooled standard deviation
+        - 'is_absolute': Whether absolute magnitude transformation was applied
     """
     clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
     results: Dict[int, Dict[str, float]] = {}
     raw_p_map: Dict[int, float] = {}
+
+    # Auto-detect whether to focus on absolute magnitude (for loss / reduction variables)
+    if use_absolute_magnitude is None:
+        clean_pop = cluster_df[variable].dropna()
+        var_lower = variable.lower()
+        is_reduction_name = any(k in var_lower for k in ["_wl_", "loss", "reduction", "_wl_kg", "_wl_%"])
+        pop_mean = clean_pop.mean() if len(clean_pop) > 0 else 0.0
+        use_absolute_magnitude = bool(is_reduction_name or pop_mean < 0)
 
     for cid in clusters:
         c_vals = cluster_df[cluster_df[cluster_col] == cid][variable].dropna()
@@ -943,18 +964,26 @@ def calculate_cohens_d_vs_rest(
                 "mean_cluster": float(c_vals.mean()) if nc > 0 else np.nan,
                 "mean_rest": float(r_vals.mean()) if nr > 0 else np.nan,
                 "sd_pooled": np.nan,
+                "is_absolute": use_absolute_magnitude,
             }
             raw_p_map[cid] = 1.0
             continue
 
-        mc, mr = float(c_vals.mean()), float(r_vals.mean())
-        vc, vr = float(c_vals.var(ddof=1)), float(r_vals.var(ddof=1))
+        if use_absolute_magnitude:
+            c_vals_calc = c_vals.abs()
+            r_vals_calc = r_vals.abs()
+        else:
+            c_vals_calc = c_vals
+            r_vals_calc = r_vals
+
+        mc, mr = float(c_vals_calc.mean()), float(r_vals_calc.mean())
+        vc, vr = float(c_vals_calc.var(ddof=1)), float(r_vals_calc.var(ddof=1))
 
         # Pooled sample standard deviation
         s_pooled = float(np.sqrt(((nc - 1) * vc + (nr - 1) * vr) / (nc + nr - 2)))
         d_val = float((mc - mr) / s_pooled) if s_pooled > 0 else 0.0
 
-        p_raw = mann_whitney_u_test(c_vals, r_vals)
+        p_raw = mann_whitney_u_test(c_vals_calc, r_vals_calc)
         raw_p_map[cid] = p_raw
 
         results[cid] = {
@@ -963,6 +992,7 @@ def calculate_cohens_d_vs_rest(
             "mean_cluster": mc,
             "mean_rest": mr,
             "sd_pooled": s_pooled,
+            "is_absolute": use_absolute_magnitude,
         }
 
     fdr_map = apply_fdr_correction(raw_p_map)
@@ -2090,7 +2120,8 @@ def plot_cluster_lollipop(
     xlabel: Optional[str] = None,
     pvalues_raw: Optional[Dict[str, Dict[int, float]]] = None,
     pvalues_fdr: Optional[Dict[str, Dict[int, float]]] = None,
-    results_df: Optional[pd.DataFrame] = None,) -> None:
+    results_df: Optional[pd.DataFrame] = None,
+    use_absolute_magnitude: Optional[bool] = None,) -> None:
     """
     Generates a unified publication-ready multi-variable lollipop plot comparing each cluster
     to the remaining cohort (Rest-of-Cohort).
@@ -2229,7 +2260,12 @@ def plot_cluster_lollipop(
     cont_plot_rows = []
     if has_cont:
         for var in continuous_variables:
-            smd_metrics = calculate_cohens_d_vs_rest(cluster_df, variable=var, cluster_col=cluster_col)
+            smd_metrics = calculate_cohens_d_vs_rest(
+                cluster_df,
+                variable=var,
+                cluster_col=cluster_col,
+                use_absolute_magnitude=use_absolute_magnitude,
+            )
             for cid in clusters:
                 m = smd_metrics.get(cid, {"d": 0.0, "p_raw": 1.0, "p_fdr": 1.0})
                 sig_str = ""
@@ -2409,8 +2445,28 @@ def plot_cluster_lollipop(
         edgecolor="gray",
     )
 
-    out_path = os.path.join(output_dir, output_filename)
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    out_path = os.path.normpath(os.path.join(output_dir, output_filename))
+    try:
+        plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    except OSError:
+        # Fallback for Windows file handles: save via temporary file and atomic replace
+        import tempfile
+        import time
+        temp_dir = os.path.dirname(out_path)
+        with tempfile.NamedTemporaryFile(dir=temp_dir, suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        plt.savefig(tmp_path, dpi=300, bbox_inches="tight")
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, out_path)
+                break
+            except OSError:
+                time.sleep(0.5)
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
     plt.close()
     print(f"  ✓ Saved: '{out_path}'")
 
@@ -2608,8 +2664,28 @@ def plot_cluster_heatmap(
     plot_title = title if title else "Prevalence Profiles Across Behavioral Clusters"
     fig.suptitle(plot_title, fontsize=18, weight="bold", y=0.98)
 
-    out_path = os.path.join(output_dir, output_filename)
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    out_path = os.path.normpath(os.path.join(output_dir, output_filename))
+    try:
+        plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    except OSError:
+        # Fallback for Windows file handles: save via temporary file and atomic replace
+        import tempfile
+        import time
+        temp_dir = os.path.dirname(out_path)
+        with tempfile.NamedTemporaryFile(dir=temp_dir, suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        plt.savefig(tmp_path, dpi=300, bbox_inches="tight")
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, out_path)
+                break
+            except OSError:
+                time.sleep(0.5)
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
     plt.close()
     print(f"  ✓ Saved: '{out_path}'")
 

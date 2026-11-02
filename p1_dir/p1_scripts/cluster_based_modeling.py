@@ -132,7 +132,7 @@ def _load_default_cluster_palette() -> List[str]:
 
 DEFAULT_CLUSTER_COLORS = _load_default_cluster_palette()
 
-POPULATION_COLOR = "#D62728"  # High-contrast red for whole population benchmark
+POPULATION_COLOR = "#7F7F7F"  # gray
 NEUTRAL_GRAY = "#7F7F7F"      # Gray for background individual trajectories
 
 
@@ -624,7 +624,7 @@ def plot_cluster_spaghetti(
         ax=axes_flat[0],
         sub_df=trajectory_df,
         title="Whole Population",
-        color="red",
+        color=POPULATION_COLOR,
         smoothing_frac=smoothing_frac,
         patient_id_col=patient_id_col,
         medical_record_id_col=medical_record_id_col,
@@ -669,7 +669,7 @@ def plot_cluster_spaghetti(
         overlay_ax.plot(
             pop_smoothed[:, 0][mask_solid_pop],
             pop_smoothed[:, 1][mask_solid_pop],
-            color="red",
+            color=POPULATION_COLOR,
             linewidth=3.0,
             linestyle="--",
             label="Population Benchmark",
@@ -678,7 +678,7 @@ def plot_cluster_spaghetti(
             overlay_ax.plot(
                 pop_smoothed[:, 0][mask_dashed_pop],
                 pop_smoothed[:, 1][mask_dashed_pop],
-                color="red",
+                color=POPULATION_COLOR,
                 linewidth=1.8,
                 linestyle=":",
             )
@@ -2128,10 +2128,8 @@ def run_cluster_modeling_pipeline(
         "figures": {
             "spaghetti_kg": fig_spaghetti_kg,
             "spaghetti_pct": fig_spaghetti_pct,
-            "spaghetti": fig_spaghetti_pct,
             "lmm_predicted_kg": fig_lmm_kg,
             "lmm_predicted_pct": fig_lmm_pct,
-            "lmm_predicted": fig_lmm_pct,
             "kaplan_meier": fig_km,
         },
     }
