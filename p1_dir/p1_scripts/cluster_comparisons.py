@@ -107,8 +107,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from scipy.stats import mannwhitneyu, chi2_contingency, fisher_exact, kruskal
+from scipy.stats import mannwhitneyu, chi2_contingency, fisher_exact, kruskal, norm
+from scipy.optimize import brentq
 from statsmodels.stats.multitest import multipletests
+from statsmodels.stats.power import TTestIndPower
+import statsmodels.stats.proportion as smprop
 from matplotlib.colors import LinearSegmentedColormap
 
 # Suppress minor visualization warnings
@@ -1215,6 +1218,171 @@ def calculate_risk_metrics(
 
 
 # =============================================================================
+# STATISTICAL POWER & MINIMUM DETECTABLE EFFECT SIZE (MDES) ANALYSIS
+# =============================================================================
+
+def calculate_cluster_power_analysis(
+    cluster_df: pd.DataFrame,
+    cluster_col: str = "cluster_id",
+    alpha: float = 0.05,
+    power: float = 0.80,
+    cluster_config_path: Optional[Union[str, Dict]] = None,
+    print_summary: bool = True,) -> Dict[str, Any]:
+    """
+    Performs statistical power and Minimum Detectable Effect Size (MDES) analysis
+    for Rest-of-Cohort comparisons based on the smallest cluster sample size in the cohort.
+
+    Methodological Logic:
+    --------------------
+    1. Smallest Cluster Identification:
+       - Sample size n_smallest is determined dynamically from the active cluster assignments
+         (excluding unassigned outlier patients with cluster_id == -1).
+       - Rest-of-Cohort sample size: n_rest = N_total - n_smallest.
+       - Imbalance ratio: ratio = n_rest / n_smallest.
+
+    2. Continuous Variables (Cohen's d):
+       - Uses two-sample independent t-test power formula via statsmodels `TTestIndPower`.
+       - Solves for minimum detectable Cohen's d at nominal alpha (0.05) and after
+         multiplicity / FDR correction across the K clusters (alpha / K).
+
+    3. Categorical Variables (Risk Difference):
+       - Uses independent two-proportion z-test power formula via statsmodels `power_proportions_2indep`.
+       - Evaluated across two standard clinical baselines:
+         * 50% event rate: Maximum variance / conservative benchmark.
+         * 20% event rate: Typical clinical event / dropout rate benchmark.
+       - Solves for minimum detectable absolute Risk Difference (in percentage points, %)
+         at nominal alpha (0.05) and multiplicity / FDR-adjusted alpha (alpha / K).
+
+    Parameters:
+    -----------
+    cluster_df : pd.DataFrame
+        Cohort dataframe with standardized cluster assignments.
+    cluster_col : str
+        Column name containing cluster identifiers (default: 'cluster_id').
+    alpha : float
+        Two-sided nominal significance threshold (default: 0.05).
+    power : float
+        Target statistical power (default: 0.80, i.e. 80% power).
+    cluster_config_path : Optional[Union[str, Dict]]
+        Path or dictionary for cluster configuration and labels.
+    print_summary : bool
+        Whether to print formatted diagnostic table to console (default: True).
+
+    Returns:
+    --------
+    Dict[str, Any]:
+        Dictionary with sample size metrics and minimum detectable effect sizes.
+    """
+    clean_clusters = cluster_df[cluster_df[cluster_col] != -1][cluster_col]
+    counts = clean_clusters.value_counts().sort_index()
+    if len(counts) < 2:
+        if print_summary:
+            print("  Warning: Power analysis requires at least 2 distinct clusters.")
+        return {}
+
+    k_clusters = len(counts)
+    min_cid = counts.idxmin()
+    n_smallest = int(counts.min())
+    n_total = int(counts.sum())
+    n_rest = n_total - n_smallest
+    ratio = float(n_rest / n_smallest)
+
+    alpha_nom = float(alpha)
+    # Multiplicity adjustment across K cluster comparisons (Bonferroni / conservative FDR bound)
+    alpha_adj = float(alpha / k_clusters)
+
+    # 1. Continuous Outcomes (Cohen's d)
+    tt_power = TTestIndPower()
+    min_d_nom = float(tt_power.solve_power(
+        effect_size=None, nobs1=n_smallest, ratio=ratio, alpha=alpha_nom, power=power
+    ))
+    min_d_adj = float(tt_power.solve_power(
+        effect_size=None, nobs1=n_smallest, ratio=ratio, alpha=alpha_adj, power=power
+    ))
+
+    def _interpret_d(d_val: float) -> str:
+        if d_val < 0.2:
+            return "negligible effect"
+        elif d_val < 0.5:
+            return "small effect"
+        elif d_val < 0.8:
+            return "medium effect"
+        else:
+            return "large effect"
+
+    # 2. Categorical Outcomes (Risk Difference, percentage points)
+    def _solve_min_rd(prop2: float, alpha_val: float) -> float:
+        def obj(diff: float) -> float:
+            return float(smprop.power_proportions_2indep(
+                diff, prop2=prop2, nobs1=n_smallest, ratio=ratio, alpha=alpha_val, return_results=False
+            )) - power
+        upper_limit = min(0.999 - prop2, 0.999)
+        try:
+            return float(brentq(obj, 1e-4, upper_limit))
+        except Exception:
+            z_alpha = float(norm.ppf(1.0 - alpha_val / 2.0))
+            z_beta = float(norm.ppf(power))
+            se = float(np.sqrt(prop2 * (1.0 - prop2) * (1.0 / n_smallest + 1.0 / n_rest)))
+            return float((z_alpha + z_beta) * se)
+
+    rd_50_nom = _solve_min_rd(0.50, alpha_nom) * 100.0
+    rd_50_adj = _solve_min_rd(0.50, alpha_adj) * 100.0
+    rd_20_nom = _solve_min_rd(0.20, alpha_nom) * 100.0
+    rd_20_adj = _solve_min_rd(0.20, alpha_adj) * 100.0
+
+    cluster_config = load_cluster_config(cluster_config_path)
+    smallest_label = get_cluster_label(min_cid, cluster_config)
+    pct_smallest = (n_smallest / n_total) * 100.0
+    pct_rest = (n_rest / n_total) * 100.0
+
+    power_results = {
+        "n_smallest": n_smallest,
+        "smallest_cluster_id": min_cid,
+        "smallest_cluster_label": smallest_label,
+        "n_rest": n_rest,
+        "n_total": n_total,
+        "k_clusters": k_clusters,
+        "ratio": ratio,
+        "target_power": power,
+        "alpha_nominal": alpha_nom,
+        "alpha_adjusted": alpha_adj,
+        "min_cohens_d_nominal": min_d_nom,
+        "min_cohens_d_adjusted": min_d_adj,
+        "min_risk_diff_50_nominal_pct": rd_50_nom,
+        "min_risk_diff_50_adjusted_pct": rd_50_adj,
+        "min_risk_diff_20_nominal_pct": rd_20_nom,
+        "min_risk_diff_20_adjusted_pct": rd_20_adj,
+    }
+
+    if print_summary:
+        print("\n" + "=" * 80)
+        print("STATISTICAL POWER & MINIMUM DETECTABLE EFFECT SIZE (MDES) ANALYSIS")
+        print("=" * 80)
+        print(f"Cohort Clustered N:        {n_total} patients across {k_clusters} clusters")
+        print(f"Smallest Cluster Analyzed: {smallest_label} (n = {n_smallest}, {pct_smallest:.1f}% of cohort)")
+        print(f"Rest-of-Cohort Benchmark:  n = {n_rest} patients ({pct_rest:.1f}% of cohort)")
+        print(f"Sample Size Ratio (n2/n1): {ratio:.2f}")
+        print(f"Target Statistical Power:  {power * 100:.1f}% (beta = {1.0 - power:.2f}, two-sided test)")
+        print("-" * 80)
+        print("A. CONTINUOUS OUTCOMES (Standardized Mean Difference, Cohen's d):")
+        print(f"   - Nominal Significance (p < {alpha_nom:.4f}):")
+        print(f"       Minimum Detectable Cohen's d:  d >= {min_d_nom:.2f} ({_interpret_d(min_d_nom)})")
+        print(f"   - Multiplicity / FDR Adjusted (p < {alpha_adj:.4f}, alpha / {k_clusters}):")
+        print(f"       Minimum Detectable Cohen's d:  d >= {min_d_adj:.2f} ({_interpret_d(min_d_adj)})")
+        print("-" * 80)
+        print("B. CATEGORICAL / BINARY OUTCOMES (Risk Difference, percentage points):")
+        print("   - Baseline Event Rate = 50% (Conservative / Maximum Variance Benchmark):")
+        print(f"       * Nominal (p < {alpha_nom:.4f}):       Min Risk Difference >= +/-{rd_50_nom:.1f} percentage points")
+        print(f"       * Adjusted (p < {alpha_adj:.4f}):      Min Risk Difference >= +/-{rd_50_adj:.1f} percentage points")
+        print("   - Baseline Event Rate = 20% (Typical Clinical Event / Dropout Rate Benchmark):")
+        print(f"       * Nominal (p < {alpha_nom:.4f}):       Min Risk Difference >= +/-{rd_20_nom:.1f} percentage points")
+        print(f"       * Adjusted (p < {alpha_adj:.4f}):      Min Risk Difference >= +/-{rd_20_adj:.1f} percentage points")
+        print("=" * 80 + "\n")
+
+    return power_results
+
+
+# =============================================================================
 # STATISTICAL ANALYSIS & TABLE CONSTRUCTION (CLUSTER VS. POPULATION MEAN)
 # =============================================================================
 
@@ -2256,6 +2424,19 @@ def plot_cluster_lollipop(
     print(f"  - Continuous Variables ({len(continuous_variables)}): {continuous_variables}")
     print(f"  - Categorical Variables ({len(categorical_variables)}): {categorical_variables}")
 
+    pwr = calculate_cluster_power_analysis(
+        cluster_df=cluster_df,
+        cluster_col=cluster_col,
+        alpha=alpha,
+        power=0.80,
+        cluster_config_path=cluster_config_path,
+        print_summary=False,
+    )
+    if pwr:
+        print(f"  - Power 80% MDES ({pwr['smallest_cluster_label']} n={pwr['n_smallest']} vs Rest n={pwr['n_rest']}):")
+        print(f"      * Continuous Cohen's d:  nominal >= {pwr['min_cohens_d_nominal']:.2f}, FDR-adj >= {pwr['min_cohens_d_adjusted']:.2f}")
+        print(f"      * Categorical Risk Diff: nominal >= +/-{pwr['min_risk_diff_50_nominal_pct']:.1f}%, FDR-adj >= +/-{pwr['min_risk_diff_50_adjusted_pct']:.1f}% (baseline=50%)")
+
     # 2. Compute Cohen's d vs Rest-of-Cohort for continuous variables
     cont_plot_rows = []
     if has_cont:
@@ -3034,6 +3215,16 @@ def run_cluster_comparison_pipeline(
         algorithm=algorithm,
         k=k,
         outcome_table=source_table,
+    )
+
+    # Step 1b: Statistical power & minimum detectable effect size (MDES) analysis
+    calculate_cluster_power_analysis(
+        cluster_df=merged_df,
+        cluster_col="cluster_id",
+        alpha=alpha,
+        power=0.80,
+        cluster_config_path=cluster_config_path,
+        print_summary=True,
     )
 
     # Step 2: Perform statistical profiling (cluster vs cohort mean)
