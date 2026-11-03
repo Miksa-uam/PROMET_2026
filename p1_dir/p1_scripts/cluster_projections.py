@@ -755,7 +755,7 @@ def plot_cluster_manifold(
             )
 
         ax.set_title(
-            f"3D {method_name} Manifold Embedding of Hybrid Distance Matrix {title_suffix}".strip(),
+            f"3D {method_name} manifold embedding of hybrid distance matrix {title_suffix}".strip(),
             fontsize=12,
             fontweight="bold",
             pad=15,
@@ -764,7 +764,7 @@ def plot_cluster_manifold(
         ax.set_ylabel(f"{method_name} Dimension 2", fontsize=10, labelpad=8)
         ax.set_zlabel(f"{method_name} Dimension 3", fontsize=10, labelpad=12)
         ax.view_init(elev=25, azim=45)
-        leg = ax.legend(title="Behavioral Cluster", loc="upper right", bbox_to_anchor=(1.25, 1.0), fontsize=9, framealpha=0.9)
+        leg = ax.legend(title="Clusters", loc="upper right", bbox_to_anchor=(1.25, 1.0), fontsize=9, framealpha=0.9)
         fig.subplots_adjust(left=0.08, right=0.85, bottom=0.08, top=0.90)
 
     else:

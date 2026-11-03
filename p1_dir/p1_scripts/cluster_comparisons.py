@@ -110,7 +110,7 @@ from scipy import stats
 from scipy.stats import mannwhitneyu, chi2_contingency, fisher_exact, kruskal, norm
 from scipy.optimize import brentq
 from statsmodels.stats.multitest import multipletests
-from statsmodels.stats.power import TTestIndPower
+from statsmodels.stats.power import TTestIndPower, FTestAnovaPower, GofChisquarePower
 import statsmodels.stats.proportion as smprop
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -962,6 +962,9 @@ def calculate_cohens_d_vs_rest(
         if nc < 2 or nr < 2:
             results[cid] = {
                 "d": 0.0,
+                "se": np.nan,
+                "ci_lower": np.nan,
+                "ci_upper": np.nan,
                 "p_raw": 1.0,
                 "p_fdr": 1.0,
                 "mean_cluster": float(c_vals.mean()) if nc > 0 else np.nan,
@@ -986,11 +989,20 @@ def calculate_cohens_d_vs_rest(
         s_pooled = float(np.sqrt(((nc - 1) * vc + (nr - 1) * vr) / (nc + nr - 2)))
         d_val = float((mc - mr) / s_pooled) if s_pooled > 0 else 0.0
 
+        # Standard error & 95% Confidence Interval for Cohen's d (Hedges & Olkin 1985 / Borenstein 2009)
+        # SE(d) = sqrt((nc + nr)/(nc * nr) + d^2 / (2 * (nc + nr - 2)))
+        se_d = float(np.sqrt((nc + nr) / (nc * nr) + (d_val ** 2) / (2.0 * (nc + nr - 2))))
+        ci_lower = float(d_val - 1.96 * se_d)
+        ci_upper = float(d_val + 1.96 * se_d)
+
         p_raw = mann_whitney_u_test(c_vals_calc, r_vals_calc)
         raw_p_map[cid] = p_raw
 
         results[cid] = {
             "d": d_val,
+            "se": se_d,
+            "ci_lower": ci_lower,
+            "ci_upper": ci_upper,
             "p_raw": p_raw,
             "mean_cluster": mc,
             "mean_rest": mr,
@@ -1065,6 +1077,9 @@ def calculate_risk_difference_vs_rest(
         if nc == 0 or nr == 0:
             results[cid] = {
                 "rd": 0.0,
+                "se": np.nan,
+                "ci_lower": np.nan,
+                "ci_upper": np.nan,
                 "p_raw": 1.0,
                 "p_fdr": 1.0,
                 "prop_cluster": np.nan,
@@ -1079,15 +1094,23 @@ def calculate_risk_difference_vs_rest(
         pc = pos_c / nc
         pr = pos_r / nr
 
-        rd_val = pc - pr
-        if as_percent:
-            rd_val *= 100.0
+        rd_raw = pc - pr
+        # Wald standard error for Risk Difference:
+        # SE(RD) = sqrt(pc * (1 - pc) / nc + pr * (1 - pr) / nr)
+        se_rd = float(np.sqrt((pc * (1.0 - pc) / nc) + (pr * (1.0 - pr) / nr)))
+        mult = 100.0 if as_percent else 1.0
+        rd_val = float(rd_raw * mult)
+        ci_lower = float((rd_raw - 1.96 * se_rd) * mult)
+        ci_upper = float((rd_raw + 1.96 * se_rd) * mult)
 
         p_raw = chi_squared_test(c_vals, r_vals)
         raw_p_map[cid] = p_raw
 
         results[cid] = {
-            "rd": float(rd_val),
+            "rd": rd_val,
+            "se": float(se_rd * mult),
+            "ci_lower": ci_lower,
+            "ci_upper": ci_upper,
             "p_raw": p_raw,
             "prop_cluster": float(pc),
             "prop_rest": float(pr),
@@ -1217,6 +1240,117 @@ def calculate_risk_metrics(
     return pd.DataFrame(results)
 
 
+def calculate_rest_of_cohort_effects(
+    cluster_df: pd.DataFrame,
+    continuous_variables: Optional[List[str]] = None,
+    categorical_variables: Optional[List[str]] = None,
+    cluster_col: str = "cluster_id",
+    alpha: float = 0.05,
+    rd_as_percent: bool = True,
+    use_absolute_magnitude: Optional[bool] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Computes pairwise standardized effect sizes and 95% confidence intervals comparing
+    each cluster against the remaining cohort (Rest-of-Cohort).
+
+    Separates statistical estimation from visualization to maintain clean separation of concerns.
+
+    Parameters:
+    -----------
+    cluster_df : pd.DataFrame
+        Cohort dataframe with cluster assignments.
+    continuous_variables : Optional[List[str]]
+        List of continuous column names to test (Cohen's d).
+    categorical_variables : Optional[List[str]]
+        List of binary/categorical column names to test (Risk Difference).
+    cluster_col : str
+        Cluster assignment column (default: 'cluster_id').
+    alpha : float
+        Nominal significance threshold for significance asterisks (default: 0.05).
+    rd_as_percent : bool
+        Whether Risk Differences are scaled as percentage points (default: True).
+    use_absolute_magnitude : Optional[bool]
+        Whether continuous variables with negative conventions use absolute values (default: True).
+
+    Returns:
+    --------
+    Tuple[pd.DataFrame, pd.DataFrame]:
+        - df_cont: DataFrame with columns ['variable', 'cluster_id', 'value', 'se', 'ci_lower', 'ci_upper', 'p_raw', 'p_fdr', 'sig_str']
+        - df_cat: DataFrame with columns ['variable', 'cluster_id', 'value', 'se', 'ci_lower', 'ci_upper', 'p_raw', 'p_fdr', 'sig_str']
+    """
+    clusters = sorted([c for c in cluster_df[cluster_col].unique() if c != -1])
+
+    cont_rows = []
+    if continuous_variables:
+        for var in continuous_variables:
+            if var not in cluster_df.columns:
+                continue
+            smd_metrics = calculate_cohens_d_vs_rest(
+                cluster_df,
+                variable=var,
+                cluster_col=cluster_col,
+                use_absolute_magnitude=use_absolute_magnitude,
+            )
+            for cid in clusters:
+                m = smd_metrics.get(
+                    cid,
+                    {"d": 0.0, "se": np.nan, "ci_lower": np.nan, "ci_upper": np.nan, "p_raw": 1.0, "p_fdr": 1.0},
+                )
+                sig_str = ""
+                if m["p_fdr"] < alpha:
+                    sig_str = "**"
+                elif m["p_raw"] < alpha:
+                    sig_str = "*"
+                cont_rows.append({
+                    "variable": var,
+                    "cluster_id": cid,
+                    "value": m["d"],
+                    "se": m.get("se", np.nan),
+                    "ci_lower": m.get("ci_lower", np.nan),
+                    "ci_upper": m.get("ci_upper", np.nan),
+                    "p_raw": m.get("p_raw", np.nan),
+                    "p_fdr": m.get("p_fdr", np.nan),
+                    "sig_str": sig_str,
+                })
+
+    cat_rows = []
+    if categorical_variables:
+        for var in categorical_variables:
+            if var not in cluster_df.columns:
+                continue
+            rd_metrics = calculate_risk_difference_vs_rest(
+                cluster_df,
+                variable=var,
+                cluster_col=cluster_col,
+                as_percent=rd_as_percent,
+            )
+            for cid in clusters:
+                m = rd_metrics.get(
+                    cid,
+                    {"rd": 0.0, "se": np.nan, "ci_lower": np.nan, "ci_upper": np.nan, "p_raw": 1.0, "p_fdr": 1.0},
+                )
+                sig_str = ""
+                if m["p_fdr"] < alpha:
+                    sig_str = "**"
+                elif m["p_raw"] < alpha:
+                    sig_str = "*"
+                cat_rows.append({
+                    "variable": var,
+                    "cluster_id": cid,
+                    "value": m["rd"],
+                    "se": m.get("se", np.nan),
+                    "ci_lower": m.get("ci_lower", np.nan),
+                    "ci_upper": m.get("ci_upper", np.nan),
+                    "p_raw": m.get("p_raw", np.nan),
+                    "p_fdr": m.get("p_fdr", np.nan),
+                    "sig_str": sig_str,
+                })
+
+    df_cont = pd.DataFrame(cont_rows) if cont_rows else pd.DataFrame()
+    df_cat = pd.DataFrame(cat_rows) if cat_rows else pd.DataFrame()
+    return df_cont, df_cat
+
+
 # =============================================================================
 # STATISTICAL POWER & MINIMUM DETECTABLE EFFECT SIZE (MDES) ANALYSIS
 # =============================================================================
@@ -1330,6 +1464,50 @@ def calculate_cluster_power_analysis(
     rd_20_nom = _solve_min_rd(0.20, alpha_nom) * 100.0
     rd_20_adj = _solve_min_rd(0.20, alpha_adj) * 100.0
 
+    # 3. Omnibus Continuous Outcomes (Kruskal-Wallis / One-Way ANOVA, Cohen's f & Eta-squared)
+    anova_power = FTestAnovaPower()
+    min_f_nom = float(anova_power.solve_power(
+        effect_size=None, nobs=n_total, k_groups=k_clusters, alpha=alpha_nom, power=power
+    ))
+    min_f_adj = float(anova_power.solve_power(
+        effect_size=None, nobs=n_total, k_groups=k_clusters, alpha=alpha_adj, power=power
+    ))
+    eta2_nom = float(min_f_nom ** 2 / (1.0 + min_f_nom ** 2))
+    eta2_adj = float(min_f_adj ** 2 / (1.0 + min_f_adj ** 2))
+
+    def _interpret_f(f_val: float) -> str:
+        if f_val < 0.10:
+            return "negligible effect"
+        elif f_val < 0.25:
+            return "small effect"
+        elif f_val < 0.40:
+            return "medium effect"
+        else:
+            return "large effect"
+
+    # 4. Omnibus Categorical / Binary Outcomes (Pearson Chi-Square / Fisher, Cohen's w & Cramer's V)
+    # Degrees of freedom for 2 x K table: df = (2 - 1) * (K - 1) = K - 1. GofChisquarePower df = n_bins - 1
+    chisq_power = GofChisquarePower()
+    min_w_nom = float(chisq_power.solve_power(
+        effect_size=None, nobs=n_total, alpha=alpha_nom, power=power, n_bins=k_clusters
+    ))
+    min_w_adj = float(chisq_power.solve_power(
+        effect_size=None, nobs=n_total, alpha=alpha_adj, power=power, n_bins=k_clusters
+    ))
+    # In a 2 x K contingency table, min(rows-1, cols-1) = 1, so Cramer's V is mathematically identical to Cohen's w
+    min_v_nom = min_w_nom
+    min_v_adj = min_w_adj
+
+    def _interpret_w(w_val: float) -> str:
+        if w_val < 0.10:
+            return "negligible effect"
+        elif w_val < 0.30:
+            return "small effect"
+        elif w_val < 0.50:
+            return "medium effect"
+        else:
+            return "large effect"
+
     cluster_config = load_cluster_config(cluster_config_path)
     smallest_label = get_cluster_label(min_cid, cluster_config)
     pct_smallest = (n_smallest / n_total) * 100.0
@@ -1352,6 +1530,15 @@ def calculate_cluster_power_analysis(
         "min_risk_diff_50_adjusted_pct": rd_50_adj,
         "min_risk_diff_20_nominal_pct": rd_20_nom,
         "min_risk_diff_20_adjusted_pct": rd_20_adj,
+        "omnibus_df": k_clusters - 1,
+        "omnibus_continuous_cohens_f_nominal": min_f_nom,
+        "omnibus_continuous_cohens_f_adjusted": min_f_adj,
+        "omnibus_continuous_eta2_nominal": eta2_nom,
+        "omnibus_continuous_eta2_adjusted": eta2_adj,
+        "omnibus_categorical_cohens_w_nominal": min_w_nom,
+        "omnibus_categorical_cohens_w_adjusted": min_w_adj,
+        "omnibus_categorical_cramers_v_nominal": min_v_nom,
+        "omnibus_categorical_cramers_v_adjusted": min_v_adj,
     }
 
     if print_summary:
@@ -1363,6 +1550,8 @@ def calculate_cluster_power_analysis(
         print(f"Rest-of-Cohort Benchmark:  n = {n_rest} patients ({pct_rest:.1f}% of cohort)")
         print(f"Sample Size Ratio (n2/n1): {ratio:.2f}")
         print(f"Target Statistical Power:  {power * 100:.1f}% (beta = {1.0 - power:.2f}, two-sided test)")
+        print("-" * 80)
+        print("PART 1: PAIRWISE COMPARISONS (Smallest Cluster vs Rest-of-Cohort)")
         print("-" * 80)
         print("A. CONTINUOUS OUTCOMES (Standardized Mean Difference, Cohen's d):")
         print(f"   - Nominal Significance (p < {alpha_nom:.4f}):")
@@ -1377,6 +1566,25 @@ def calculate_cluster_power_analysis(
         print("   - Baseline Event Rate = 20% (Typical Clinical Event / Dropout Rate Benchmark):")
         print(f"       * Nominal (p < {alpha_nom:.4f}):       Min Risk Difference >= +/-{rd_20_nom:.1f} percentage points")
         print(f"       * Adjusted (p < {alpha_adj:.4f}):      Min Risk Difference >= +/-{rd_20_adj:.1f} percentage points")
+        print("-" * 80)
+        print(f"PART 2: OMNIBUS MULTI-GROUP COMPARISONS (Across All {k_clusters} Clusters)")
+        print("-" * 80)
+        print(f"C. CONTINUOUS OUTCOMES (Kruskal-Wallis / One-Way ANOVA, Cohen's f & Eta-Squared):")
+        print(f"   - Nominal Significance (p < {alpha_nom:.4f}):")
+        print(f"       Minimum Detectable Cohen's f:  f >= {min_f_nom:.2f} ({_interpret_f(min_f_nom)}; eta^2 = {eta2_nom:.3f})")
+        print(f"   - Multiplicity / FDR Adjusted (p < {alpha_adj:.4f}, alpha / {k_clusters}):")
+        print(f"       Minimum Detectable Cohen's f:  f >= {min_f_adj:.2f} ({_interpret_f(min_f_adj)}; eta^2 = {eta2_adj:.3f})")
+        print(f"   * Methodological Note: Parametric ANOVA F-power serves as the standardized")
+        print(f"     power benchmark for Kruskal-Wallis. Pitman Asymptotic Relative Efficiency (ARE)")
+        print(f"     is at least 0.864 (uniform) and 0.955 (normal), and >= 1.0 for skewed distributions.")
+        print("-" * 80)
+        print(f"D. CATEGORICAL / BINARY OUTCOMES (Pearson Chi-Square / Fisher, Cohen's w & Cramer's V):")
+        print(f"   - Nominal Significance (p < {alpha_nom:.4f}, df = {k_clusters - 1}):")
+        print(f"       Minimum Detectable Cohen's w:  w >= {min_w_nom:.2f} (Cramer's V >= {min_v_nom:.2f}; {_interpret_w(min_w_nom)})")
+        print(f"   - Multiplicity / FDR Adjusted (p < {alpha_adj:.4f}, alpha / {k_clusters}):")
+        print(f"       Minimum Detectable Cohen's w:  w >= {min_w_adj:.2f} (Cramer's V >= {min_v_adj:.2f}; {_interpret_w(min_w_adj)})")
+        print(f"   * Methodological Note: For 2 x K contingency tables, Cramer's V = Cohen's w")
+        print(f"     because min(rows - 1, cols - 1) = min(1, {k_clusters - 1}) = 1.")
         print("=" * 80 + "\n")
 
     return power_results
@@ -1606,6 +1814,23 @@ def analyze_cluster_vs_population(
     print(pub_df.head(15).to_string(index=False))
     print("=" * 80 + "\n")
 
+    print("=" * 80)
+    print("OMNIBUS MULTI-GROUP COMPARISONS PREVIEW (Cohen's f & Cramér's V)")
+    print("=" * 80)
+    omnibus_preview_cols = [
+        c for c in [
+            "Variable",
+            "Whole population: Mean (±SD) / N (%)",
+            "p-value",
+            "p-value (FDR-corrected)",
+            "Test_Used",
+            "Effect_Size",
+        ]
+        if c in omnibus_df.columns
+    ]
+    print(omnibus_df[omnibus_preview_cols].head(15).to_string(index=False))
+    print("=" * 80 + "\n")
+
     return results_df
 
 
@@ -1691,6 +1916,7 @@ def compare_clusters_multigroup(
     if fdr_correction:
         size_row["p-value (FDR-corrected)"] = "N/A"
     size_row["Test_Used"] = "N/A"
+    size_row["Effect_Size"] = "N/A"
     results.append(size_row)
 
     # 2. Iterate across variables
@@ -1741,6 +1967,7 @@ def compare_clusters_multigroup(
         if len(valid_groups) < 2:
             row["p-value"] = np.nan
             row["Test_Used"] = "insufficient_data"
+            row["Effect_Size"] = "N/A"
             results.append(row)
             continue
 
@@ -1748,12 +1975,20 @@ def compare_clusters_multigroup(
             try:
                 all_vals = np.concatenate(valid_groups)
                 if np.all(all_vals == all_vals[0]):
-                    p_val, test_used = 1.0, "no_variation"
+                    p_val, test_used, effect_size_str = 1.0, "no_variation", "f = 0.00"
                 else:
                     _, p_val = kruskal(*valid_groups)
                     test_used = "kruskal_wallis"
+                    # Cohen's f calculation from one-way variance dispersion:
+                    # f = sqrt(eta^2 / (1 - eta^2)) where eta^2 = SS_between / SS_total
+                    gm = np.mean(all_vals)
+                    ss_total = np.sum((all_vals - gm) ** 2)
+                    ss_between = np.sum([len(g) * (np.mean(g) - gm) ** 2 for g in valid_groups])
+                    eta2 = ss_between / ss_total if ss_total > 0 else 0.0
+                    cohen_f = float(np.sqrt(eta2 / (1.0 - eta2))) if (eta2 < 1.0 and ss_total > 0) else 0.0
+                    effect_size_str = f"f = {cohen_f:.2f}"
             except Exception:
-                p_val, test_used = np.nan, "error"
+                p_val, test_used, effect_size_str = np.nan, "error", "N/A"
         else:
             try:
                 contingency = []
@@ -1763,10 +1998,14 @@ def compare_clusters_multigroup(
                     contingency.append([pos, neg])
                 cont_mat = np.array(contingency)
                 if np.any(cont_mat.sum(axis=0) == 0):
-                    p_val, test_used = 1.0, "no_variation"
+                    p_val, test_used, effect_size_str = 1.0, "no_variation", "V = 0.00"
                 elif cont_mat.shape == (2, 2):
                     try:
                         chi2, p_val, dof, exp = chi2_contingency(cont_mat)
+                        N_mat = cont_mat.sum()
+                        min_dim = min(cont_mat.shape[0] - 1, cont_mat.shape[1] - 1)
+                        cramers_v = float(np.sqrt(chi2 / (N_mat * min_dim))) if N_mat > 0 and min_dim > 0 else 0.0
+                        effect_size_str = f"V = {cramers_v:.2f}"
                         if exp.min() < 5:
                             _, p_val = fisher_exact(cont_mat)
                             test_used = "fisher_exact"
@@ -1775,14 +2014,20 @@ def compare_clusters_multigroup(
                     except Exception:
                         _, p_val = fisher_exact(cont_mat)
                         test_used = "fisher_exact"
+                        effect_size_str = "N/A"
                 else:
                     chi2, p_val, dof, exp = chi2_contingency(cont_mat)
                     test_used = "chi_squared"
+                    N_mat = cont_mat.sum()
+                    min_dim = min(cont_mat.shape[0] - 1, cont_mat.shape[1] - 1)
+                    cramers_v = float(np.sqrt(chi2 / (N_mat * min_dim))) if N_mat > 0 and min_dim > 0 else 0.0
+                    effect_size_str = f"V = {cramers_v:.2f}"
             except Exception:
-                p_val, test_used = np.nan, "error"
+                p_val, test_used, effect_size_str = np.nan, "error", "N/A"
 
         row["p-value"] = p_val
         row["Test_Used"] = test_used
+        row["Effect_Size"] = effect_size_str
         results.append(row)
 
     omnibus_df = pd.DataFrame(results)
@@ -1791,7 +2036,7 @@ def compare_clusters_multigroup(
     if fdr_correction and "p-value" in omnibus_df.columns:
         pvals = pd.to_numeric(omnibus_df["p-value"], errors="coerce")
         valid_mask = pvals.notna()
-        omnibus_df["p-value (FDR-corrected)"] = np.nan
+        omnibus_df["p-value (FDR-corrected)"] = "N/A"
         if valid_mask.sum() > 0:
             _, corrected, _, _ = multipletests(pvals[valid_mask], method="fdr_bh")
             omnibus_df.loc[valid_mask, "p-value (FDR-corrected)"] = corrected
@@ -1800,6 +2045,7 @@ def compare_clusters_multigroup(
     if fdr_correction and "p-value (FDR-corrected)" in omnibus_df.columns:
         end_cols.append("p-value (FDR-corrected)")
     end_cols.append("Test_Used")
+    end_cols.append("Effect_Size")
 
     col_order = ["Variable", pop_col] + cluster_cols + end_cols
     omnibus_df = omnibus_df.reindex(columns=col_order)
@@ -2281,6 +2527,8 @@ def plot_cluster_lollipop(
     cluster_config_path: Optional[Union[str, Dict]] = None,
     rd_as_percent: bool = True,
     alpha: float = 0.05,
+    show_ci: bool = True,
+    show_stick: bool = False,
     title: Optional[str] = None,
     xlabel_cont: Optional[str] = None,
     xlabel_cat: Optional[str] = None,
@@ -2289,9 +2537,11 @@ def plot_cluster_lollipop(
     pvalues_raw: Optional[Dict[str, Dict[int, float]]] = None,
     pvalues_fdr: Optional[Dict[str, Dict[int, float]]] = None,
     results_df: Optional[pd.DataFrame] = None,
-    use_absolute_magnitude: Optional[bool] = None,) -> None:
+    use_absolute_magnitude: Optional[bool] = None,
+    effects_cont: Optional[pd.DataFrame] = None,
+    effects_cat: Optional[pd.DataFrame] = None,) -> None:
     """
-    Generates a unified publication-ready multi-variable lollipop plot comparing each cluster
+    Generates a unified publication-ready multi-variable lollipop/forest plot comparing each cluster
     to the remaining cohort (Rest-of-Cohort).
 
     Visual & Methodological Architecture:
@@ -2299,6 +2549,7 @@ def plot_cluster_lollipop(
     1. Top Section (Continuous Variables):
        - Displays Standardized Mean Differences (Cohen's d) vs. Rest-of-Cohort.
        - Formula: d = (mean_cluster - mean_rest) / s_pooled.
+       - Whiskers display 95% Confidence Intervals for Cohen's d (Hedges & Olkin 1985).
        - A vertical solid black line at x=0 represents parity.
        - Positive values indicate scores above the rest of the cohort; negative below.
        - Statistical significance marked via asterisks (* raw p < alpha, ** FDR q < alpha)
@@ -2307,16 +2558,15 @@ def plot_cluster_lollipop(
     2. Bottom Section (Binary/Categorical Characteristics):
        - Displays Risk Differences (RD = prop_cluster - prop_rest) vs. Rest-of-Cohort.
        - Plotted in percentage points (%) when rd_as_percent=True.
+       - Whiskers display 95% Confidence Intervals for Risk Difference (Wald interval).
        - A vertical solid black line at x=0 represents parity.
        - Statistical significance marked via asterisks (* raw p < alpha, ** FDR q < alpha)
          computed from Chi-squared / Fisher's exact tests vs. Rest-of-Cohort.
 
-    3. Unified Layout:
-       - Both sections share a common 0 axis / vertical midline.
-       - The separation between panels is subtle and cohesive, avoiding mathematical
-         confusion while maintaining publication harmony.
-       - Cluster stems and marker heads strictly follow `cluster_color_dict.json`.
-       - Clean, 1-indexed cluster legend placed to the right.
+    3. Clean Separation of Concerns:
+       - Pure visualization module. Statistical estimations vs Rest-of-Cohort are computed
+         via `calculate_rest_of_cohort_effects` (or accepted via effects_cont / effects_cat).
+       - Statistical power and MDES analyses are strictly separated into `calculate_cluster_power_analysis`.
 
     Parameters:
     -----------
@@ -2325,7 +2575,7 @@ def plot_cluster_lollipop(
     continuous_variables : Optional[List[str]]
         Continuous variables to plot as SMDs (defaults to age, baseline weight, max and total weight loss).
     categorical_variables : Optional[List[str]]
-        Binary variables to plot as Risk Differences (defaults to sex, 10% achievement, 60d dropout, 5% achievement).
+        Binary variables to plot as Risk Differences (defaults to sex, 10% achievement, 60d dropout).
     variables : Optional[List[str]]
         Legacy list of variables (partitioned into continuous and categorical if provided).
     output_filename : str
@@ -2342,6 +2592,10 @@ def plot_cluster_lollipop(
         Whether to report Risk Difference in percentage points (default: True).
     alpha : float
         Significance threshold for asterisks (default: 0.05).
+    show_ci : bool
+        Whether to render 95% Confidence Interval whiskers (default: True).
+    show_stick : bool
+        Whether to draw horizontal stems from 0 to point estimate (default: False for clean forest plot).
     title : Optional[str]
         Overall figure title.
     xlabel_cont : Optional[str]
@@ -2358,6 +2612,12 @@ def plot_cluster_lollipop(
         Optional precomputed FDR-adjusted p-values.
     results_df : Optional[pd.DataFrame]
         Optional results dataframe for backwards compatibility.
+    use_absolute_magnitude : Optional[bool]
+        Whether weight loss variables use absolute magnitude (default: True).
+    effects_cont : Optional[pd.DataFrame]
+        Precomputed continuous effect sizes from `calculate_rest_of_cohort_effects`.
+    effects_cat : Optional[pd.DataFrame]
+        Precomputed categorical effect sizes from `calculate_rest_of_cohort_effects`.
     """
     output_dir = _resolve_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -2368,8 +2628,22 @@ def plot_cluster_lollipop(
     if continuous_variables is None and categorical_variables is None:
         if variables is not None:
             # Legacy call: partition supplied variables
-            continuous_variables = []
-            categorical_variables = []
+            continuous_variables = [
+                    "age", 
+                    "baseline_weight_kg", 
+                    "baseline_bmi", 
+                    "total_followup_days", 
+                    # "days_to_nadir",
+                    "max_wl_%",
+                    "weight_regain_%", 
+                    "total_wl_%",
+                    # "60d_wl_%"
+            ]
+            categorical_variables = [
+                    "sex_f", 
+                    "10%_wl_achieved", 
+                    "60d_dropout"
+            ]
             for v in variables:
                 if v in cluster_df.columns:
                     vtype = _infer_variable_type(cluster_df[v], variable_name=v)
@@ -2385,16 +2659,20 @@ def plot_cluster_lollipop(
                     "baseline_weight_kg", 
                     "baseline_bmi", 
                     "total_followup_days", 
-                    "days_to_nadir",
+                    # "days_to_nadir",
                     "max_wl_%",
                     "weight_regain_%", 
                     "total_wl_%",
-                    "60d_wl_%"
+                    # "60d_wl_%"
                     ]
                 if v in cluster_df.columns
             ]
             categorical_variables = [
-                v for v in ["sex_f", "10%_wl_achieved", "60d_dropout"]
+                v for v in [
+                    "sex_f", 
+                    "10%_wl_achieved", 
+                    "60d_dropout"
+                    ]
                 if v in cluster_df.columns
             ]
 
@@ -2420,68 +2698,24 @@ def plot_cluster_lollipop(
         print("  Warning: No continuous or categorical variables available for lollipop plot.")
         return
 
-    print(f"\n[Lollipop Plot] Generating SMD & Risk Difference plot vs Rest-of-Cohort...")
+    print(f"\n[Forest/Lollipop Plot] Generating SMD & Risk Difference plot vs Rest-of-Cohort...")
     print(f"  - Continuous Variables ({len(continuous_variables)}): {continuous_variables}")
     print(f"  - Categorical Variables ({len(categorical_variables)}): {categorical_variables}")
 
-    pwr = calculate_cluster_power_analysis(
-        cluster_df=cluster_df,
-        cluster_col=cluster_col,
-        alpha=alpha,
-        power=0.80,
-        cluster_config_path=cluster_config_path,
-        print_summary=False,
-    )
-    if pwr:
-        print(f"  - Power 80% MDES ({pwr['smallest_cluster_label']} n={pwr['n_smallest']} vs Rest n={pwr['n_rest']}):")
-        print(f"      * Continuous Cohen's d:  nominal >= {pwr['min_cohens_d_nominal']:.2f}, FDR-adj >= {pwr['min_cohens_d_adjusted']:.2f}")
-        print(f"      * Categorical Risk Diff: nominal >= +/-{pwr['min_risk_diff_50_nominal_pct']:.1f}%, FDR-adj >= +/-{pwr['min_risk_diff_50_adjusted_pct']:.1f}% (baseline=50%)")
-
-    # 2. Compute Cohen's d vs Rest-of-Cohort for continuous variables
-    cont_plot_rows = []
-    if has_cont:
-        for var in continuous_variables:
-            smd_metrics = calculate_cohens_d_vs_rest(
-                cluster_df,
-                variable=var,
-                cluster_col=cluster_col,
-                use_absolute_magnitude=use_absolute_magnitude,
-            )
-            for cid in clusters:
-                m = smd_metrics.get(cid, {"d": 0.0, "p_raw": 1.0, "p_fdr": 1.0})
-                sig_str = ""
-                if m["p_fdr"] < alpha:
-                    sig_str = "**"
-                elif m["p_raw"] < alpha:
-                    sig_str = "*"
-                cont_plot_rows.append({
-                    "variable": var,
-                    "cluster_id": cid,
-                    "value": m["d"],
-                    "sig_str": sig_str,
-                })
-
-    # 3. Compute Risk Differences vs Rest-of-Cohort for categorical variables
-    cat_plot_rows = []
-    if has_cat:
-        for var in categorical_variables:
-            rd_metrics = calculate_risk_difference_vs_rest(cluster_df, variable=var, cluster_col=cluster_col, as_percent=rd_as_percent)
-            for cid in clusters:
-                m = rd_metrics.get(cid, {"rd": 0.0, "p_raw": 1.0, "p_fdr": 1.0})
-                sig_str = ""
-                if m["p_fdr"] < alpha:
-                    sig_str = "**"
-                elif m["p_raw"] < alpha:
-                    sig_str = "*"
-                cat_plot_rows.append({
-                    "variable": var,
-                    "cluster_id": cid,
-                    "value": m["rd"],
-                    "sig_str": sig_str,
-                })
-
-    df_cont = pd.DataFrame(cont_plot_rows) if cont_plot_rows else pd.DataFrame()
-    df_cat = pd.DataFrame(cat_plot_rows) if cat_plot_rows else pd.DataFrame()
+    # 2. Extract or compute effect sizes and 95% CIs vs. Rest-of-Cohort
+    if effects_cont is not None or effects_cat is not None:
+        df_cont = effects_cont if effects_cont is not None else pd.DataFrame()
+        df_cat = effects_cat if effects_cat is not None else pd.DataFrame()
+    else:
+        df_cont, df_cat = calculate_rest_of_cohort_effects(
+            cluster_df=cluster_df,
+            continuous_variables=continuous_variables if has_cont else None,
+            categorical_variables=categorical_variables if has_cat else None,
+            cluster_col=cluster_col,
+            alpha=alpha,
+            rd_as_percent=rd_as_percent,
+            use_absolute_magnitude=use_absolute_magnitude,
+        )
 
     plt.style.use("seaborn-v0_8-whitegrid")
 
@@ -2492,10 +2726,15 @@ def plot_cluster_lollipop(
         vars_list: List[str],
         panel_title: str,
         panel_xlabel: str,
-        is_percent: bool = False,
-    ) -> float:
-        vals = panel_df["value"].values
-        max_abs = float(np.nanmax(np.abs(vals))) if len(vals) > 0 and not np.all(np.isnan(vals)) else 1.0
+        is_percent: bool = False,) -> float:
+        all_vals = [panel_df["value"].dropna().values]
+        if show_ci and "ci_lower" in panel_df.columns:
+            all_vals.append(panel_df["ci_lower"].dropna().values)
+        if show_ci and "ci_upper" in panel_df.columns:
+            all_vals.append(panel_df["ci_upper"].dropna().values)
+        flat_vals = np.concatenate(all_vals) if all_vals else np.array([1.0])
+        max_abs = float(np.nanmax(np.abs(flat_vals))) if len(flat_vals) > 0 and not np.all(np.isnan(flat_vals)) else 1.0
+
         if is_percent:
             xlim_val = float(np.ceil(max(max_abs, 10.0) * 1.25 / 5.0) * 5.0)
         else:
@@ -2517,15 +2756,41 @@ def plot_cluster_lollipop(
                 color = get_cluster_color(cid, cluster_config, DEFAULT_PALETTE)
                 y_coord = y_range[idx]
 
-                ax.hlines(y=y_coord, xmin=0, xmax=val, colors=color, linewidth=2.5, alpha=0.85)
-                ax.scatter(val, y_coord, color=color, s=75, zorder=5)
+                # Optional stem representing point estimate deviation from parity (omitted by default for clean forest display)
+                if show_stick:
+                    ax.hlines(y=y_coord, xmin=0, xmax=val, colors=color, linewidth=2.2, alpha=0.70, zorder=3)
+
+                # 95% Confidence Interval error bar
+                if show_ci and pd.notna(r.get("ci_lower")) and pd.notna(r.get("ci_upper")):
+                    ci_low = r["ci_lower"]
+                    ci_high = r["ci_upper"]
+                    err_low = max(0.0, val - ci_low)
+                    err_high = max(0.0, ci_high - val)
+                    ax.errorbar(
+                        x=val,
+                        y=y_coord,
+                        xerr=[[err_low], [err_high]],
+                        fmt="none",
+                        ecolor=color,
+                        elinewidth=1.8,
+                        capsize=3.8,
+                        capthick=1.4,
+                        alpha=0.90,
+                        zorder=4,
+                    )
+
+                # Point estimate marker head
+                ax.scatter(val, y_coord, color=color, s=80, edgecolor="white", linewidth=0.7, zorder=5)
 
                 sig_str = r.get("sig_str", "")
                 if sig_str:
                     offset = 0.02 * (2 * xlim_val)
-                    x_txt = val + offset if val >= 0 else val - offset
+                    if show_ci and pd.notna(r.get("ci_upper")) and pd.notna(r.get("ci_lower")):
+                        x_txt = max(val, r["ci_upper"]) + offset if val >= 0 else min(val, r["ci_lower"]) - offset
+                    else:
+                        x_txt = val + offset if val >= 0 else val - offset
                     align = "left" if val >= 0 else "right"
-                    ax.text(x_txt, y_coord, sig_str, ha=align, va="center", fontsize=14, weight="bold")
+                    ax.text(x_txt, y_coord, sig_str, ha=align, va="center", fontsize=14, weight="bold", zorder=6)
 
             y_ticks.append(float(np.mean(y_range)))
             # Clean display label: remove redundant '(y/n)'
@@ -2546,6 +2811,18 @@ def plot_cluster_lollipop(
         return xlim_val
 
     # 4. Render Layout
+    pct_label = "percentage points" if rd_as_percent else "proportion"
+    def_xlabel_cont = (
+        "Standardized mean difference (Cohen's d with 95% CI, Parity = 0)"
+        if show_ci
+        else "Standardized mean difference (Cohen's d, Parity = 0)"
+    )
+    def_xlabel_cat = (
+        f"Risk difference ({pct_label} with 95% CI, Parity = 0)"
+        if show_ci
+        else f"Risk difference ({pct_label}, Parity = 0)"
+    )
+
     if has_cont and has_cat:
         h_top = max(4.0, len(continuous_variables) * len(clusters) * 0.28 + 1.2)
         h_bottom = max(3.5, len(categorical_variables) * len(clusters) * 0.28 + 1.2)
@@ -2558,23 +2835,22 @@ def plot_cluster_lollipop(
             ax=ax_top,
             panel_df=df_cont,
             vars_list=continuous_variables,
-            panel_title="A. Continuous Characteristics & Endpoints (Standardized Mean Difference vs. Rest-of-Cohort)",
-            panel_xlabel=xlabel_cont if xlabel_cont else "Standardized Mean Difference (Cohen's d, Parity = 0)",
+            panel_title="Continuous variables: cluster vs. rest-of-cohort standardized mean differences",
+            panel_xlabel=xlabel_cont if xlabel_cont else def_xlabel_cont,
             is_percent=False,
         )
 
-        pct_label = "percentage points, %" if rd_as_percent else "proportion"
         _render_panel(
             ax=ax_bottom,
             panel_df=df_cat,
             vars_list=categorical_variables,
-            panel_title="B. Binary Characteristics & Outcomes (Risk Difference vs. Rest-of-Cohort)",
-            panel_xlabel=xlabel_cat if xlabel_cat else f"Risk Difference vs. Rest-of-Cohort ({pct_label}; Parity = 0)",
+            panel_title="Binary variables: cluster vs. rest-of-cohort risk differences",
+            panel_xlabel=xlabel_cat if xlabel_cat else def_xlabel_cat,
             is_percent=rd_as_percent,
         )
 
         legend_ax = ax_top
-        fig_title = title if title else "Cluster-wise Phenotypic & Outcome Deviations vs. Rest-of-Cohort"
+        fig_title = title if title else "Cluster-wise deviations from the rest of the cohort"
         fig.suptitle(fig_title, fontsize=16, weight="bold", y=0.995)
 
     elif has_cont:
@@ -2584,28 +2860,27 @@ def plot_cluster_lollipop(
             ax=ax,
             panel_df=df_cont,
             vars_list=continuous_variables,
-            panel_title="Continuous Characteristics & Endpoints (Standardized Mean Difference vs. Rest-of-Cohort)",
-            panel_xlabel=xlabel_cont or xlabel or "Standardized Mean Difference (Cohen's d, Parity = 0)",
+            panel_title="Continuous variables: cluster vs. rest-of-cohort standardized mean differences",
+            panel_xlabel=xlabel_cont or xlabel or def_xlabel_cont,
             is_percent=False,
         )
         legend_ax = ax
-        fig_title = title if title else "Cluster-wise Standardized Mean Differences (Cohen's d vs. Rest-of-Cohort)"
+        fig_title = title if title else "Cluster-wise standardized mean differences from the rest of the cohort",
         fig.suptitle(fig_title, fontsize=16, weight="bold", y=0.995)
 
     else:
         h_bottom = max(4.5, len(categorical_variables) * len(clusters) * 0.32 + 1.5)
         fig, ax = plt.subplots(figsize=(14, h_bottom))
-        pct_label = "percentage points, %" if rd_as_percent else "proportion"
         _render_panel(
             ax=ax,
             panel_df=df_cat,
             vars_list=categorical_variables,
-            panel_title="Binary Characteristics & Outcomes (Risk Difference vs. Rest-of-Cohort)",
-            panel_xlabel=xlabel_cat or xlabel or f"Risk Difference vs. Rest-of-Cohort ({pct_label}; Parity = 0)",
+            panel_title="Binary variables: cluster vs. rest-of-cohort risk differences",
+            panel_xlabel=xlabel_cat or xlabel or def_xlabel_cat,
             is_percent=rd_as_percent,
         )
         legend_ax = ax
-        fig_title = title if title else "Cluster-wise Risk Differences vs. Rest-of-Cohort"
+        fig_title = title if title else "Cluster-wise risk differences from the rest of the cohort"
         fig.suptitle(fig_title, fontsize=16, weight="bold", y=0.995)
 
     # 5. Unified Cluster Legend
@@ -2624,6 +2899,20 @@ def plot_cluster_lollipop(
         frameon=True,
         fancybox=True,
         edgecolor="gray",
+    )
+
+    info_note = (
+        "\n*  p < 0.05 (raw)\n** p < 0.05 (FDR)"
+    )
+    legend_ax.text(
+        1.02,
+        0.35 if (has_cont and has_cat) else 0.25,
+        info_note,
+        transform=legend_ax.transAxes,
+        ha="left",
+        va="center",
+        fontsize=11,
+        bbox=dict(boxstyle="round,pad=0.5", facecolor="#F8F9FA", alpha=0.9, edgecolor="#CCCCCC"),
     )
 
     out_path = os.path.normpath(os.path.join(output_dir, output_filename))
@@ -2650,6 +2939,10 @@ def plot_cluster_lollipop(
                 pass
     plt.close()
     print(f"  ✓ Saved: '{out_path}'")
+
+
+# Modern semantic alias: plot_cluster_forest_vs_rest
+plot_cluster_forest_vs_rest = plot_cluster_lollipop
 
 
 # =============================================================================
@@ -2842,7 +3135,7 @@ def plot_cluster_heatmap(
             spine.set_linewidth(1.0)
         ax.grid(False)
 
-    plot_title = title if title else "Prevalence Profiles Across Behavioral Clusters"
+    plot_title = title if title else "Weight gain cause and eating behavior profiles across clusters"
     fig.suptitle(plot_title, fontsize=18, weight="bold", y=0.98)
 
     out_path = os.path.normpath(os.path.join(output_dir, output_filename))
@@ -3218,7 +3511,7 @@ def run_cluster_comparison_pipeline(
     )
 
     # Step 1b: Statistical power & minimum detectable effect size (MDES) analysis
-    calculate_cluster_power_analysis(
+    power_results = calculate_cluster_power_analysis(
         cluster_df=merged_df,
         cluster_col="cluster_id",
         alpha=alpha,
@@ -3239,6 +3532,11 @@ def run_cluster_comparison_pipeline(
         alpha=alpha,
         save_to_db=save_to_db,
     )
+
+    # Attach power analysis results to dataframe attributes for seamless programmatic retrieval
+    if power_results:
+        results_df.attrs["power_analysis"] = power_results
+        merged_df.attrs["power_analysis"] = power_results
 
     # Step 3: Export to Excel if requested (includes publication, detailed, and omnibus sheets)
     if output_excel_path:
@@ -3303,7 +3601,17 @@ def run_cluster_comparison_pipeline(
             # 2. Multi-variable Lollipop Plot (SMD & Risk Difference vs. Rest-of-Cohort)
             if lollipop_continuous_vars is None:
                 lp_cont = [
-                    v for v in ["age", "baseline_weight_kg", "max_wl_%", "total_wl_%"]
+                    v for v in [
+                        "age", 
+                        "baseline_weight_kg", 
+                        "baseline_bmi", 
+                        "total_followup_days", 
+                        # "days_to_nadir",
+                        "max_wl_%",
+                        "weight_regain_%", 
+                        "total_wl_%",
+                        # "60d_wl_%"
+                    ]
                     if v in merged_df.columns
                 ]
             else:
@@ -3311,7 +3619,11 @@ def run_cluster_comparison_pipeline(
 
             if lollipop_categorical_vars is None:
                 lp_cat = [
-                    v for v in ["sex_f", "10%_wl_achieved", "60d_dropout", "5%_wl_achieved"]
+                    v for v in [
+                        "sex_f", 
+                        "10%_wl_achieved", 
+                        "60d_dropout", 
+                        ]
                     if v in merged_df.columns
                 ]
             else:

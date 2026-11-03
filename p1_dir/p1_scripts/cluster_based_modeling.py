@@ -733,7 +733,7 @@ def plot_cluster_spaghetti(
 
     metric_name = "Percentage Weight Loss" if y_col == "weight_loss_pct" else "Weight Loss"
     fig.suptitle(
-        f"{metric_name} Trajectories by Behavioral Phenotype Cluster {title_suffix}".strip(),
+        f"{metric_name} trajectories by cluster {title_suffix}".strip(),
         fontsize=16,
         fontweight="bold",
     )
@@ -1475,8 +1475,8 @@ def plot_lmm_predicted_trajectories(
         ax.axhline(-10, color="#888888", linestyle=":", linewidth=0.7, alpha=0.5)
         ax.axhline(-15, color="#aaaaaa", linestyle="-.", linewidth=0.7, alpha=0.5)
 
-    metric_name = "Percentage Weight Loss" if use_pct else "Weight"
-    ylabel = "Predicted Weight Loss (%)" if use_pct else "Predicted Body Weight (kg)"
+    metric_name = "Percentage weight loss" if use_pct else "Weight"
+    ylabel = "Predicted weight loss (%)" if use_pct else "Predicted body weight (kg)"
     legend_loc = "upper right"
 
     # Title & Subtitle with statistical test results
@@ -1489,14 +1489,14 @@ def plot_lmm_predicted_trajectories(
             f"Trajectory Differences (Cluster × Time Spline): Omnibus Wald χ² = {omni['chi2']:.2f} "
             f"(df={omni['df']}), {p_str} [{stars}]"
         )
-        full_title = f"LMM-Predicted {metric_name} Trajectories by Cluster {title_suffix}\n{sub_title}".strip()
+        full_title = f"LMM-predicted {metric_name} trajectories by cluster {title_suffix}\n{sub_title}".strip()
     else:
-        full_title = f"LMM-Predicted {metric_name} Trajectories by Cluster {title_suffix}".strip()
+        full_title = f"LMM-predicted {metric_name} trajectories by cluster {title_suffix}".strip()
 
     ax.set_title(full_title, fontsize=13, fontweight="bold", pad=12)
-    ax.set_xlabel("Follow-up Length (Days)", fontsize=12)
+    ax.set_xlabel("Follow-up length (days)", fontsize=12)
     ax.set_ylabel(ylabel, fontsize=12)
-    ax.legend(title="Behavioral Cluster", loc=legend_loc, fontsize=10)
+    ax.legend(title="Clusters", loc=legend_loc, fontsize=10)
     ax.grid(True, linestyle="--", alpha=0.6)
 
     # Informative footnote explaining confidence bands and the solid vs dashed transitions
@@ -1823,7 +1823,7 @@ def plot_cluster_kaplan_meier(
     # 4. Styling & Annotations
     p_format = f"{logrank_p:.2E}" if logrank_p < 0.001 else f"{logrank_p:.3f}"
     ax.set_title(
-        f"Time to Achieving 10% Weight Loss by Behavioral Phenotype Cluster\n"
+        f"Time to achieving 10% weight loss by cluster\n"
         f"Log-Rank Omnibus Test: Chi2 = {logrank_stat:.2f}, p = {p_format}",
         fontsize=14,
         fontweight="bold",
@@ -1832,7 +1832,7 @@ def plot_cluster_kaplan_meier(
     y_label = "Cumulative Probability of Achieving 10% Weight Loss (%)" if cumulative_event else "Probability of Remaining Without 10% Weight Loss"
     ax.set_ylabel(y_label, fontsize=12)
     ax.set_ylim(0, 105 if cumulative_event else 1.05)
-    ax.legend(title="Behavioral Cluster", loc="lower right" if cumulative_event else "lower left", fontsize=10)
+    ax.legend(title="Clusters", loc="lower right" if cumulative_event else "lower left", fontsize=10)
     ax.grid(True, linestyle="--", alpha=0.5)
     plt.tight_layout()
 
