@@ -3,6 +3,7 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import ttest_ind, chi2_contingency
+from statsmodels.stats.multitest import multipletests
 from multiprocessing import Pool, cpu_count
 import itertools
 
@@ -73,6 +74,158 @@ def categorical_pvalue(series1, series2):
     except ValueError: # Catches errors with all 0s in a row/col
         return np.nan
 
+def format_pval(pval):
+    """
+    Formats a p-value to 3 decimal places or '<0.001' if p < 0.001.
+    Handles NaN/None gracefully by returning 'N/A'.
+    """
+    if pd.isna(pval) or pval is None:
+        return "N/A"
+    try:
+        p = float(pval)
+    except (ValueError, TypeError):
+        return "N/A"
+    if p < 0.001:
+        return "<0.001"
+    return f"{p:.3f}"
+
+def adjust_pvalues_fdr(pvalues, method="fdr_bh"):
+    """
+    Applies Benjamini-Hochberg False Discovery Rate (FDR) multiple testing correction.
+    
+    Parameters:
+    -----------
+    pvalues : list or np.ndarray or pd.Series
+        Collection of raw nominal p-values. May contain NaN values.
+    method : str
+        Multiple testing correction method (default: 'fdr_bh').
+        
+    Returns:
+    --------
+    list:
+        List of FDR-adjusted p-values (q-values) with NaNs preserved at original indices.
+    """
+    p_array = np.array(pvalues, dtype=float)
+    valid_mask = ~np.isnan(p_array)
+    adjusted = np.full_like(p_array, np.nan)
+    if np.any(valid_mask):
+        _, corrected, _, _ = multipletests(p_array[valid_mask], method=method)
+        adjusted[valid_mask] = corrected
+    return adjusted.tolist()
+
+def calculate_effect_size(series1, series2, vtype="continuous"):
+    """
+    Calculates unified Standardized Mean Differences (SMD / Cohen's d / Austin's standardized difference)
+    along with analytical 95% Confidence Intervals for continuous and binary/categorical variables.
+
+    Statistical Methodology:
+    ------------------------
+    1. Continuous variables (Cohen's d):
+       - Let group 1 have sample size n1, mean m1, sample variance s1^2.
+       - Let group 2 have sample size n2, mean m2, sample variance s2^2.
+       - Pooled standard deviation:
+           s_pooled = sqrt( ((n1 - 1)*s1^2 + (n2 - 1)*s2^2) / (n1 + n2 - 2) )
+       - Cohen's d:
+           d = (m1 - m2) / s_pooled
+       - Standard Error (Hedges & Olkin 1985 / Borenstein et al. 2009):
+           SE(d) = sqrt( (n1 + n2)/(n1 * n2) + d^2 / (2 * (n1 + n2 - 2)) )
+       - 95% CI: [d - 1.96 * SE(d), d + 1.96 * SE(d)]
+
+    2. Binary/Categorical variables (Austin 2009 Standardized Difference):
+       - Evaluated on binary 0/1 indicator distributions.
+       - Proportions p1 and p2 in groups 1 and 2.
+       - Pooled variance:
+           s_p^2 = (p1 * (1 - p1) + p2 * (1 - p2)) / 2
+       - Standardized Difference:
+           d = (p1 - p2) / sqrt(s_p^2)
+       - Standard Error (Austin 2009 / Borenstein 2009 delta method):
+           SE(d) = sqrt( (n1 + n2)/(n1 * n2) + d^2 / (2 * (n1 + n2)) )
+       - 95% CI: [d - 1.96 * SE(d), d + 1.96 * SE(d)]
+
+    3. Availability variables:
+       - Transformed to binary indicator (1 = not null, 0 = null) and evaluated via Austin's SMD.
+
+    Parameters:
+    -----------
+    series1 : pd.Series or array-like
+        Values for group 1 (e.g., daughter / subset cohort).
+    series2 : pd.Series or array-like
+        Values for group 2 (e.g., mother-excluding-daughter / rest cohort).
+    vtype : str
+        Variable type: 'continuous', 'categorical', or 'availability'.
+
+    Returns:
+    --------
+    dict:
+        {
+            'smd': float,
+            'se': float,
+            'ci_lower': float,
+            'ci_upper': float
+        }
+    """
+    if vtype == "availability":
+        s1 = series1.notna().astype(float)
+        s2 = series2.notna().astype(float)
+        effective_vtype = "categorical"
+    else:
+        s1 = pd.to_numeric(series1, errors="coerce").dropna()
+        s2 = pd.to_numeric(series2, errors="coerce").dropna()
+        effective_vtype = vtype
+
+    n1, n2 = len(s1), len(s2)
+    if n1 < 2 or n2 < 2:
+        return {"smd": np.nan, "se": np.nan, "ci_lower": np.nan, "ci_upper": np.nan}
+
+    if effective_vtype == "continuous":
+        m1, m2 = float(s1.mean()), float(s2.mean())
+        v1, v2 = float(s1.var(ddof=1)), float(s2.var(ddof=1))
+
+        denom = n1 + n2 - 2
+        s_pooled = float(np.sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / denom)) if denom > 0 else 0.0
+
+        if s_pooled == 0.0:
+            return {"smd": 0.0, "se": 0.0, "ci_lower": 0.0, "ci_upper": 0.0}
+
+        smd = float((m1 - m2) / s_pooled)
+        se = float(np.sqrt((n1 + n2) / (n1 * n2) + (smd ** 2) / (2.0 * (n1 + n2 - 2))))
+        ci_lower = float(smd - 1.96 * se)
+        ci_upper = float(smd + 1.96 * se)
+
+    else: # categorical / binary
+        p1 = float(s1.mean())
+        p2 = float(s2.mean())
+
+        pooled_var = float((p1 * (1.0 - p1) + p2 * (1.0 - p2)) / 2.0)
+        if pooled_var <= 0.0:
+            return {"smd": 0.0, "se": 0.0, "ci_lower": 0.0, "ci_upper": 0.0}
+
+        smd = float((p1 - p2) / np.sqrt(pooled_var))
+        se = float(np.sqrt((n1 + n2) / (n1 * n2) + (smd ** 2) / (2.0 * (n1 + n2))))
+        ci_lower = float(smd - 1.96 * se)
+        ci_upper = float(smd + 1.96 * se)
+
+    return {"smd": smd, "se": se, "ci_lower": ci_lower, "ci_upper": ci_upper}
+
+def format_effect_size(smd_dict_or_val, ci_lower=None, ci_upper=None, decimals=2):
+    """
+    Formats standardized effect size into '±X.XX [Y.YY, Z.ZZ]' string.
+    Accepts either a dictionary from calculate_effect_size or separate numerical values.
+    """
+    if isinstance(smd_dict_or_val, dict):
+        smd = smd_dict_or_val.get("smd")
+        ci_lower = smd_dict_or_val.get("ci_lower")
+        ci_upper = smd_dict_or_val.get("ci_upper")
+    else:
+        smd = smd_dict_or_val
+
+    if pd.isna(smd) or pd.isna(ci_lower) or pd.isna(ci_upper):
+        return "N/A"
+
+    sign = "+" if smd > 0 else ""
+    return f"{sign}{smd:.{decimals}f} [{ci_lower:.{decimals}f}, {ci_upper:.{decimals}f}]"
+
+
 # ==============================================================================
 # 2. BOOTSTRAPPING WORKER FUNCTIONS (FOR PARALLELIZATION)
 # These must be top-level functions to be pickled by multiprocessing.
@@ -121,12 +274,19 @@ def run_bootstrap_comparison(series1, series2, vtype, n_iterations=5000, run_boo
     else: # categorical
         std_p_value = categorical_pvalue(s1, s2)
 
+    # Calculate effect size (SMD)
+    es = calculate_effect_size(s1, s2, vtype)
+
     results = {
         'std_p': std_p_value,
         'boot_p': np.nan,
         'boot_ci_low': np.nan,
         'boot_ci_high': np.nan,
-        'obs_diff': np.nan
+        'obs_diff': np.nan,
+        'smd': es['smd'],
+        'smd_ci_low': es['ci_lower'],
+        'smd_ci_high': es['ci_upper'],
+        'smd_formatted': format_effect_size(es)
     }
 
     # --- Conditional bootstrapping ---
