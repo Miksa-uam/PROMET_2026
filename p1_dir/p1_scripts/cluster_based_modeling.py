@@ -764,8 +764,7 @@ def compute_nadir_weight_loss_metrics(
     medical_record_id_col: str = "medical_record_id",
     body_weight_col: str = "weight_kg",
     days_col: str = "days_from_baseline",
-    cluster_config_path: Optional[Union[str, Dict]] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    cluster_config_path: Optional[Union[str, Dict]] = None,) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Computes patient-level nadir and weight regain metrics and performs a statistical
     comparison across behavioral phenotype clusters.
@@ -909,8 +908,7 @@ def fit_trajectory_mixed_model(
     time_degree: int = 2,
     patient_id_col: str = "patient_id",
     medical_record_id_col: str = "medical_record_id",
-    body_weight_col: str = "weight_kg",
-) -> Tuple[Any, pd.DataFrame]:
+    body_weight_col: str = "weight_kg",) -> Tuple[Any, pd.DataFrame]:
     """
     Fits a Linear Mixed-Effects Model (LMM) with non-linear spline time curves and random effects.
 
@@ -1496,7 +1494,7 @@ def plot_lmm_predicted_trajectories(
     ax.set_title(full_title, fontsize=13, fontweight="bold", pad=12)
     ax.set_xlabel("Follow-up length (days)", fontsize=12)
     ax.set_ylabel(ylabel, fontsize=12)
-    ax.legend(title="Clusters", loc=legend_loc, fontsize=10)
+    ax.legend(title="Clusters vs. rest-of-cohort", loc=legend_loc, fontsize=10)
     ax.grid(True, linestyle="--", alpha=0.6)
 
     # Informative footnote explaining confidence bands and the solid vs dashed transitions
