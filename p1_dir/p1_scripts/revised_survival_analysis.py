@@ -2,7 +2,7 @@
 Revised Survival Analysis Module (Paper 1 Revision)
 
 Scientific Purpose:
-Addresses Reviewer Comment 2 regarding high attrition (48.5% dropout at 60 days),
+Addresses JMIR reviewer comments regarding high attrition (48.5% dropout at 60 days),
 informative censoring, and speed of achieving 10% weight loss:
 1. Compares 60-day completers vs. 60-day dropouts on baseline traits, treatment engagement,
    and self-reported eating behaviors (with SMDs and Benjamini-Hochberg FDR q-values).
@@ -76,26 +76,27 @@ DROPOUT_COMP_VARS = [
     ("baseline_bmi", "Baseline BMI (kg/m²)", "continuous"),
     ("baseline_fat_%", "Baseline fat mass (%)", "continuous"),
     ("baseline_muscle_%", "Baseline muscle mass (%)", "continuous"),
-    # Engagement & follow-up metrics
-    ("delim_eng", "Treatment engagement and follow-up", "header"),
-    ("total_followup_days", "Total follow-up length (days)", "continuous"),
-    ("dietitian_visits", "Number of dietitian visits", "continuous"),
-    ("nr_total_measurements", "Total number of measurements", "continuous"),
-    ("avg_days_between_measurements", "Average measurement frequency (days)", "continuous"),
     # Eating behaviors
-    ("delim_eb", "Self-reported eating behaviors", "header"),
+    ("delim_eb", "Self-reported eating behaviors at baseline", "header"),
     ("hunger_yn", "Hunger awareness (yes/no)", "categorical"),
     ("satiety_yn", "Satiety responsiveness (yes/no)", "categorical"),
     ("emotional_eating_yn", "Emotional eating (yes/no)", "categorical"),
     ("emotional_eating_value_likert", "Emotional eating score (1-10)", "continuous"),
     ("quantity_control_likert", "Quantity control score (1-10)", "continuous"),
     ("impulse_control_likert", "Impulse control score (1-10)", "continuous"),
+    # Engagement & follow-up metrics
+    ("delim_eng", "Treatment engagement and follow-up", "header"),
+    ("total_followup_days", "Total follow-up length (days)", "continuous"),
+    # ("dietitian_visits", "Number of dietitian visits", "continuous"),
+    # ("nr_total_measurements", "Total number of measurements", "continuous"),
+    # ("avg_days_between_measurements", "Average measurement frequency (days)", "continuous"),
     # Treatment outcomes
     ("delim_out", "Clinical weight loss outcomes", "header"),
     ("total_wl_%", "Total weight loss (%)", "continuous"),
-    ("final_bmi", "Final BMI (kg/m²)", "continuous"),
+    # ("final_bmi", "Final BMI (kg/m²)", "continuous"),
     ("bmi_reduction", "BMI reduction (kg/m²)", "continuous"),
     ("10%_wl_achieved", "Achieved 10% weight loss (n)", "categorical"),
+    ("days_to_10%_wl", "Days to 10% weight loss (days)", "continuous")
 ]
 
 def compare_60d_dropouts_vs_completers(df):
@@ -278,7 +279,9 @@ def plot_corrected_kaplan_meier(df_surv, strata_col, strata_label, output_dir, t
     kmf_1.plot_cumulative_density(ax=ax, color=colors[1], linewidth=1.8, ci_alpha=0.12)
     
     title_time = f" (0 to {time_horizon_cap} Days)" if time_horizon_cap is not None else ""
-    ax.set_title(f"Time to 10% weight loss by {pub_strata_name}{title_time}\n{p_text}", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"Time to 10% weight loss by {pub_strata_name}\n{p_text}", fontsize=13, # fontweight="bold"
+    )
     ax.set_xlabel("Days", fontsize=11)
     ax.set_ylabel("Probability of weight loss target achievement", fontsize=11)
     ax.grid(True, linestyle="--", alpha=0.6)
@@ -527,11 +530,11 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     
     title_time = f" (0 to {time_horizon_cap} Days)" if time_horizon_cap is not None else ""
     ax.set_title(
-        f"Cumulative Incidence of 10% Weight Loss (Competing Risks){title_time}\nby {pub_strata_name}\n{sig_text}",
-        fontsize=12, fontweight="bold"
+        f"Cumulative incidence of 10% weight loss by {pub_strata_name}, \nwith dropout as a competing risk\n{sig_text}",
+        fontsize=12, #fontweight="bold"
     )
     ax.set_xlabel("Days", fontsize=11)
-    ax.set_ylabel("Cumulative Incidence (Accounting for Dropout)", fontsize=11)
+    ax.set_ylabel("Cumulative incidence (accounting for dropout)", fontsize=11)
     ax.set_ylim(0, 1.05)
     
     if max_days <= 75:
@@ -770,7 +773,7 @@ if __name__ == "__main__":
     paper1_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     db_in = os.path.join(paper1_dir, "p1_dbs", "pnk_db2_p1_in_2025.sqlite")
     db_out = os.path.join(paper1_dir, "p1_dbs", "pnk_db2_p1_out_2025.sqlite")
-    p_dir = os.path.join(paper1_dir, "p1_outputs", "km_plots")
+    p_dir = os.path.join(paper1_dir, "p1_outputs", "survival_analysis")
     
     # Default execution: 65-day cap (+-10d observational window around 60d), clean CIF with Numbers-at-Risk
     run_survival_analysis_suite(
