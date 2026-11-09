@@ -2,7 +2,7 @@
 Revised Survival Analysis Module (Paper 1 Revision)
 
 Scientific Purpose:
-Addresses JMIR reviewer comments regarding high attrition (48.5% dropout at 60 days),
+Addresses Reviewer Comment 2 regarding high attrition (48.5% dropout at 60 days),
 informative censoring, and speed of achieving 10% weight loss:
 1. Compares 60-day completers vs. 60-day dropouts on baseline traits, treatment engagement,
    and self-reported eating behaviors (with SMDs and Benjamini-Hochberg FDR q-values).
@@ -19,7 +19,7 @@ informative censoring, and speed of achieving 10% weight loss:
      Cause-Specific Cox Proportional Hazards Models (adjusting for age, sex, and baseline BMI).
    - Adds aligned Numbers-at-Risk tables below the CIF curves.
    - Displays both Unadjusted and Adjusted Hazard Ratios with p-values in plot titles.
-   - Supports toggling competing dropout curves on/off (plot_dropout=True/False).
+   - Eliminates boundary tie distortions and duplicate file saves.
 """
 
 import os
@@ -58,7 +58,10 @@ from lifelines.plotting import add_at_risk_counts
 # Publication configuration
 PUBLICATION_NAMES = {
     "emotional_eating_yn": "Emotional eating (yes/no)",
-    "emotional_eating_value_likert": "Emotional eating score (1-10)"
+    "emotional_eating_value_likert": "Emotional eating score (1-10)",
+    "emotional_eating_median_split": "Emotional eating score (1-10)",
+    "quantity_control_likert": "Quantity control score (1-10)",
+    "quantity_control_median_split": "Quantity control score (1-10)",
 }
 
 # ==============================================================================
@@ -76,27 +79,26 @@ DROPOUT_COMP_VARS = [
     ("baseline_bmi", "Baseline BMI (kg/m²)", "continuous"),
     ("baseline_fat_%", "Baseline fat mass (%)", "continuous"),
     ("baseline_muscle_%", "Baseline muscle mass (%)", "continuous"),
+    # Engagement & follow-up metrics
+    ("delim_eng", "Treatment engagement and follow-up", "header"),
+    ("total_followup_days", "Total follow-up length (days)", "continuous"),
+    ("dietitian_visits", "Number of dietitian visits", "continuous"),
+    ("nr_total_measurements", "Total number of measurements", "continuous"),
+    ("avg_days_between_measurements", "Average measurement frequency (days)", "continuous"),
     # Eating behaviors
-    ("delim_eb", "Self-reported eating behaviors at baseline", "header"),
+    ("delim_eb", "Self-reported eating behaviors", "header"),
     ("hunger_yn", "Hunger awareness (yes/no)", "categorical"),
     ("satiety_yn", "Satiety responsiveness (yes/no)", "categorical"),
     ("emotional_eating_yn", "Emotional eating (yes/no)", "categorical"),
     ("emotional_eating_value_likert", "Emotional eating score (1-10)", "continuous"),
     ("quantity_control_likert", "Quantity control score (1-10)", "continuous"),
     ("impulse_control_likert", "Impulse control score (1-10)", "continuous"),
-    # Engagement & follow-up metrics
-    ("delim_eng", "Treatment engagement and follow-up", "header"),
-    ("total_followup_days", "Total follow-up length (days)", "continuous"),
-    # ("dietitian_visits", "Number of dietitian visits", "continuous"),
-    # ("nr_total_measurements", "Total number of measurements", "continuous"),
-    # ("avg_days_between_measurements", "Average measurement frequency (days)", "continuous"),
     # Treatment outcomes
     ("delim_out", "Clinical weight loss outcomes", "header"),
     ("total_wl_%", "Total weight loss (%)", "continuous"),
-    # ("final_bmi", "Final BMI (kg/m²)", "continuous"),
+    ("final_bmi", "Final BMI (kg/m²)", "continuous"),
     ("bmi_reduction", "BMI reduction (kg/m²)", "continuous"),
     ("10%_wl_achieved", "Achieved 10% weight loss (n)", "categorical"),
-    ("days_to_10%_wl", "Days to 10% weight loss (days)", "continuous")
 ]
 
 def compare_60d_dropouts_vs_completers(df):
@@ -213,7 +215,8 @@ def prepare_survival_cohort(df, time_horizon_cap=None):
             df_surv["days_to_10%_wl"],
             df_surv["total_followup_days"]
         )
-        df_surv["duration"] = pd.to_numeric(df_surv["duration"], errors="coerce").fillna(1).clip(lower=1, upper=time_horizon_cap)
+        # Censored patients active past the cap are placed immediately after the window
+        df_surv["duration"] = pd.to_numeric(df_surv["duration"], errors="coerce").fillna(1).clip(lower=1, upper=time_horizon_cap + 0.1)
     else:
         achieved = (df_surv["10%_wl_achieved"] == 1)
         df_surv["event"] = np.where(achieved, 1, 0)
@@ -222,11 +225,15 @@ def prepare_survival_cohort(df, time_horizon_cap=None):
             df_surv["days_to_10%_wl"],
             df_surv["total_followup_days"]
         )
-        df_surv["duration"] = pd.to_numeric(df_surv["duration"], errors="coerce").fillna(1).clip(lower=1, upper=180)
+        df_surv["duration"] = pd.to_numeric(df_surv["duration"], errors="coerce").fillna(1).clip(lower=1, upper=180.1)
     
     num_likert = pd.to_numeric(df_surv["emotional_eating_value_likert"], errors="coerce")
     median_ee = num_likert.median()
     df_surv["emotional_eating_median_split"] = (num_likert >= median_ee).astype(int)
+    
+    num_qc = pd.to_numeric(df_surv["quantity_control_likert"], errors="coerce")
+    median_qc = num_qc.median()
+    df_surv["quantity_control_median_split"] = (num_qc >= median_qc).astype(int)
     
     return df_surv, median_ee
 
@@ -256,27 +263,55 @@ def plot_corrected_kaplan_meier(df_surv, strata_col, strata_label, output_dir, t
     p_text = f"Log-rank p={p_val:.3f}"
     
     pub_strata_name = PUBLICATION_NAMES.get(strata_col, strata_label)
-    if strata_col == "emotional_eating_yn":
+    if strata_col.endswith("_yn"):
         label_0 = f"{pub_strata_name.split('(')[0].strip()}: No"
         label_1 = f"{pub_strata_name.split('(')[0].strip()}: Yes"
-        file_suffix = "emotional_eating_yn"
+        file_suffix = strata_col
     else:
-        med_val = int(df_surv["emotional_eating_value_likert"].median())
-        label_0 = f"{pub_strata_name.split('(')[0].strip()}: < median ({med_val})"
-        label_1 = f"{pub_strata_name.split('(')[0].strip()}: >= median ({med_val})"
-        file_suffix = "emotional_eating_value_likert"
+        if "emotional_eating" in strata_col:
+            orig_col = "emotional_eating_value_likert"
+        elif "quantity_control" in strata_col:
+            orig_col = "quantity_control_likert"
+        else:
+            orig_col = strata_col.replace("_median_split", "")
+            
+        if orig_col in df_surv.columns:
+            med_val = int(pd.to_numeric(df_surv[orig_col], errors="coerce").median())
+            label_0 = f"{pub_strata_name.split('(')[0].strip()}: < median ({med_val})"
+            label_1 = f"{pub_strata_name.split('(')[0].strip()}: >= median ({med_val})"
+            file_suffix = orig_col
+        else:
+            label_0 = f"{pub_strata_name}: Group 0"
+            label_1 = f"{pub_strata_name}: Group 1"
+            file_suffix = strata_col
         
     kmf_0 = KaplanMeierFitter()
-    kmf_0.fit(g0["duration"], event_observed=g0["event"], label=label_0)
+    kmf_0.fit(g0["duration"], event_observed=g0["event"])
     
     kmf_1 = KaplanMeierFitter()
-    kmf_1.fit(g1["duration"], event_observed=g1["event"], label=label_1)
-    
+    kmf_1.fit(g1["duration"], event_observed=g1["event"])
+
+    val0_km = (1.0 - kmf_0.predict(max_days)) * 100
+    val1_km = (1.0 - kmf_1.predict(max_days)) * 100
+
+    lbl_0_km = f"{label_0} ({val0_km:.1f}%)"
+    lbl_1_km = f"{label_1} ({val1_km:.1f}%)"
+
     fig, ax = plt.subplots(figsize=(8, 8))
     colors = {0: "blue", 1: "orange"}
     
-    kmf_0.plot_cumulative_density(ax=ax, color=colors[0], linewidth=1.8, ci_alpha=0.12)
-    kmf_1.plot_cumulative_density(ax=ax, color=colors[1], linewidth=1.8, ci_alpha=0.12)
+    kmf_0.plot_cumulative_density(ax=ax, color=colors[0], linewidth=1.8, ci_alpha=0.12, label=lbl_0_km)
+    kmf_1.plot_cumulative_density(ax=ax, color=colors[1], linewidth=1.8, ci_alpha=0.12, label=lbl_1_km)
+
+    star = "*" if p_val < 0.05 else ""
+    ax.text(
+        max_days + 1.0, val0_km / 100, f"{val0_km:.1f}%{star}",
+        color=colors[0], va="center", ha="left", fontweight="bold", fontsize=10, clip_on=False
+    )
+    ax.text(
+        max_days + 1.0, val1_km / 100, f"{val1_km:.1f}%{star}",
+        color=colors[1], va="center", ha="left", fontweight="bold", fontsize=10, clip_on=False
+    )
     
     title_time = f" (0 to {time_horizon_cap} Days)" if time_horizon_cap is not None else ""
     ax.set_title(
@@ -288,18 +323,16 @@ def plot_corrected_kaplan_meier(df_surv, strata_col, strata_label, output_dir, t
     ax.legend(title=pub_strata_name, loc="upper left", fontsize=10, frameon=True)
     ax.set_ylim(0, 1.05)
     
+    # Regular 15-day intervals for clean table alignment
     if max_days <= 75:
         xticks = [0, 15, 30, 45, 60]
-        if max_days not in xticks:
-            xticks.append(max_days)
-            xticks = sorted(xticks)
     else:
         xticks = [0, 30, 60, 90, 120, 150, 180]
         
     ax.set_xticks(xticks)
     ax.set_xlim(0, max_days)
     
-    add_at_risk_counts(kmf_0, kmf_1, ax=ax, fig=fig, rows_to_show=["At risk"], xticks=xticks)
+    add_at_risk_counts(kmf_0, kmf_1, ax=ax, fig=fig, rows_to_show=["At risk"], xticks=xticks, at_risk_count_from_start_of_period=True)
     ax.set_xlim(0, max_days)
     
     fig.tight_layout(pad=1.5)
@@ -311,10 +344,6 @@ def plot_corrected_kaplan_meier(df_surv, strata_col, strata_label, output_dir, t
     
     fig.savefig(svg_path, format="svg", bbox_inches="tight")
     fig.savefig(png_path, format="png", dpi=300, bbox_inches="tight")
-    
-    if time_horizon_cap is not None:
-        fig.savefig(os.path.join(output_dir, f"km_10perc_wl_by_{file_suffix}.svg"), format="svg", bbox_inches="tight")
-        fig.savefig(os.path.join(output_dir, f"km_10perc_wl_by_{file_suffix}.png"), format="png", dpi=300, bbox_inches="tight")
         
     print(f"  - Saved KM SVG: {svg_path}")
     print(f"  - Saved KM PNG: {png_path}")
@@ -348,7 +377,7 @@ def prepare_competing_risks_cohort(df, time_horizon_cap=None):
     Event definitions:
     - Status 1: 10% weight loss achieved on or before time_horizon_cap (Target Event)
     - Status 2: Ceased follow-up prior to time_horizon_cap without 10% WL (Competing Event)
-    - Status 0: Active in follow-up at time_horizon_cap without 10% WL (Right-censored)
+    - Status 0: Active in follow-up past time_horizon_cap without 10% WL (Right-censored at cap + 0.1)
     
     Args:
         df (pd.DataFrame): Cohort dataframe from timetoevent_eb_compl (N=1,052).
@@ -373,8 +402,9 @@ def prepare_competing_risks_cohort(df, time_horizon_cap=None):
             status.append(2)  # Competing Dropout Event
             duration.append(max(1, row["total_followup_days"]))
         else:
-            status.append(0)  # Censored: Active in program at max_days
-            duration.append(max_days)
+            status.append(0)  # Censored: Active in program past max_days
+            # Placed immediately after the observation window so active patients remain in the risk set
+            duration.append(max_days + 0.1)
             
     df_cr["cr_status"] = status
     df_cr["cr_duration"] = duration
@@ -382,6 +412,10 @@ def prepare_competing_risks_cohort(df, time_horizon_cap=None):
     num_likert = pd.to_numeric(df_cr["emotional_eating_value_likert"], errors="coerce")
     median_ee = num_likert.median()
     df_cr["emotional_eating_median_split"] = (num_likert >= median_ee).astype(int)
+    
+    num_qc = pd.to_numeric(df_cr["quantity_control_likert"], errors="coerce")
+    median_qc = num_qc.median()
+    df_cr["quantity_control_median_split"] = (num_qc >= median_qc).astype(int)
     
     return df_cr, median_ee
 
@@ -484,15 +518,27 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     g1 = df_cr[df_cr[strata_col] == groups[1]]
     
     pub_strata_name = PUBLICATION_NAMES.get(strata_col, strata_label)
-    if strata_col == "emotional_eating_yn":
+    if strata_col.endswith("_yn"):
         label_0 = f"{pub_strata_name.split('(')[0].strip()}: No"
         label_1 = f"{pub_strata_name.split('(')[0].strip()}: Yes"
-        file_suffix = "emotional_eating_yn"
+        file_suffix = strata_col
     else:
-        med_val = int(df_cr["emotional_eating_value_likert"].median())
-        label_0 = f"{pub_strata_name.split('(')[0].strip()}: < median ({med_val})"
-        label_1 = f"{pub_strata_name.split('(')[0].strip()}: >= median ({med_val})"
-        file_suffix = "emotional_eating_value_likert"
+        if "emotional_eating" in strata_col:
+            orig_col = "emotional_eating_value_likert"
+        elif "quantity_control" in strata_col:
+            orig_col = "quantity_control_likert"
+        else:
+            orig_col = strata_col.replace("_median_split", "")
+            
+        if orig_col in df_cr.columns:
+            med_val = int(pd.to_numeric(df_cr[orig_col], errors="coerce").median())
+            label_0 = f"{pub_strata_name.split('(')[0].strip()}: < median ({med_val})"
+            label_1 = f"{pub_strata_name.split('(')[0].strip()}: >= median ({med_val})"
+            file_suffix = orig_col
+        else:
+            label_0 = f"{pub_strata_name}: Group 0"
+            label_1 = f"{pub_strata_name}: Group 1"
+            file_suffix = strata_col
         
     # Statistical significance test for competing risks (Unadjusted & Adjusted)
     sig_res = test_competing_risks_significance(df_cr, strata_col)
@@ -507,16 +553,32 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     colors = {0: "blue", 1: "orange"}
     
     # Event 1: 10% Weight Loss Target Achievement
-    lbl_0_target = f"{label_0} (10% WL)" if plot_dropout else label_0
-    lbl_1_target = f"{label_1} (10% WL)" if plot_dropout else label_1
-    
     ajf_0 = AalenJohansenFitter(calculate_variance=True)
-    ajf_0.fit(g0["cr_duration"], g0["cr_status"], event_of_interest=1, label=lbl_0_target)
-    ajf_0.plot(ax=ax, color=colors[0], linewidth=1.8)
+    ajf_0.fit(g0["cr_duration"], g0["cr_status"], event_of_interest=1)
     
     ajf_1 = AalenJohansenFitter(calculate_variance=True)
-    ajf_1.fit(g1["cr_duration"], g1["cr_status"], event_of_interest=1, label=lbl_1_target)
-    ajf_1.plot(ax=ax, color=colors[1], linewidth=1.8)
+    ajf_1.fit(g1["cr_duration"], g1["cr_status"], event_of_interest=1)
+
+    val0 = ajf_0.cumulative_density_["CIF_1"].loc[:max_days].iloc[-1] * 100
+    val1 = ajf_1.cumulative_density_["CIF_1"].loc[:max_days].iloc[-1] * 100
+
+    lbl_0_target = f"{label_0} ({val0:.1f}%)" if not plot_dropout else f"{label_0} (10% WL)"
+    lbl_1_target = f"{label_1} ({val1:.1f}%)" if not plot_dropout else f"{label_1} (10% WL)"
+
+    ajf_0.plot(ax=ax, color=colors[0], linewidth=1.8, label=lbl_0_target)
+    ajf_1.plot(ax=ax, color=colors[1], linewidth=1.8, label=lbl_1_target)
+
+    # Annotate final cumulative incidence outside the right plot border
+    if not plot_dropout:
+        star = "*" if (unadj_p < 0.05 or adj_p < 0.05) else ""
+        ax.text(
+            max_days + 1.0, val0 / 100, f"{val0:.1f}%{star}",
+            color=colors[0], va="center", ha="left", fontweight="bold", fontsize=10, clip_on=False
+        )
+        ax.text(
+            max_days + 1.0, val1 / 100, f"{val1:.1f}%{star}",
+            color=colors[1], va="center", ha="left", fontweight="bold", fontsize=10, clip_on=False
+        )
     
     # Event 2: Competing Early Dropout (optional)
     if plot_dropout:
@@ -537,11 +599,9 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     ax.set_ylabel("Cumulative incidence (accounting for dropout)", fontsize=11)
     ax.set_ylim(0, 1.05)
     
+    # Regular 15-day intervals for clean table alignment
     if max_days <= 75:
         xticks = [0, 15, 30, 45, 60]
-        if max_days not in xticks:
-            xticks.append(max_days)
-            xticks = sorted(xticks)
     else:
         xticks = [0, 30, 60, 90, 120, 150, 180]
         
@@ -554,7 +614,7 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     if not plot_dropout:
         kmf0_risk = KaplanMeierFitter().fit(g0["cr_duration"], [1] * len(g0), label=label_0)
         kmf1_risk = KaplanMeierFitter().fit(g1["cr_duration"], [1] * len(g1), label=label_1)
-        add_at_risk_counts(kmf0_risk, kmf1_risk, ax=ax, fig=fig, rows_to_show=["At risk"], xticks=xticks)
+        add_at_risk_counts(kmf0_risk, kmf1_risk, ax=ax, fig=fig, rows_to_show=["At risk"], xticks=xticks, at_risk_count_from_start_of_period=True)
         ax.set_xlim(0, max_days)
         
     fig.tight_layout(pad=1.5)
@@ -567,10 +627,6 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     
     fig.savefig(svg_path, format="svg", bbox_inches="tight")
     fig.savefig(png_path, format="png", dpi=300, bbox_inches="tight")
-    
-    if time_horizon_cap is not None and not plot_dropout:
-        fig.savefig(os.path.join(output_dir, f"cif_10perc_wl_by_{file_suffix}.svg"), format="svg", bbox_inches="tight")
-        fig.savefig(os.path.join(output_dir, f"cif_10perc_wl_by_{file_suffix}.png"), format="png", dpi=300, bbox_inches="tight")
         
     print(f"  - Saved Competing Risks CIF SVG: {svg_path}")
     print(f"  - Saved Competing Risks CIF PNG: {png_path}")
@@ -609,10 +665,13 @@ def compute_event_probabilities_table(df_surv, df_cr, time_horizon_cap=None):
         
     records = []
     
-    for strata_col, strata_name in [
+    strata_targets = [
         ("emotional_eating_yn", "Emotional Eating (Yes/No)"),
-        ("emotional_eating_median_split", "Emotional Eating Score (Median-Split)")
-    ]:
+        ("emotional_eating_median_split", "Emotional Eating Score (Median-Split)"),
+        ("quantity_control_median_split", "Quantity Control Score (Median-Split)")
+    ]
+    
+    for strata_col, strata_name in strata_targets:
         groups = sorted(df_surv[strata_col].dropna().unique())
         for g_val in groups:
             sub_km = df_surv[df_surv[strata_col] == g_val]
@@ -623,9 +682,16 @@ def compute_event_probabilities_table(df_surv, df_cr, time_horizon_cap=None):
             ajf = AalenJohansenFitter(calculate_variance=False)
             ajf.fit(sub_cr["cr_duration"], sub_cr["cr_status"], event_of_interest=1)
             
-            label = "Yes" if g_val == 1 else "No"
-            if "Median" in strata_name:
-                med_val = int(df_surv["emotional_eating_value_likert"].median())
+            if strata_col.endswith("_yn"):
+                label = "Yes" if g_val == 1 else "No"
+            else:
+                if "emotional_eating" in strata_col:
+                    orig_col = "emotional_eating_value_likert"
+                elif "quantity_control" in strata_col:
+                    orig_col = "quantity_control_likert"
+                else:
+                    orig_col = strata_col.replace("_median_split", "")
+                med_val = int(pd.to_numeric(df_surv[orig_col], errors="coerce").median())
                 label = f">= Median ({med_val})" if g_val == 1 else f"< Median ({med_val})"
                 
             for day in milestones:
@@ -702,7 +768,11 @@ def run_survival_analysis_suite(input_db_path, output_db_path, plot_dir, time_ho
         df_surv, "emotional_eating_median_split", "Emotional eating score (1-10)",
         plot_dir, time_horizon_cap=time_horizon_cap, show_plot=show_plot
     )
-    km_summary_df = pd.DataFrame([km_stat_yn, km_stat_likert])
+    km_stat_qc = plot_corrected_kaplan_meier(
+        df_surv, "quantity_control_median_split", "Quantity control score (1-10)",
+        plot_dir, time_horizon_cap=time_horizon_cap, show_plot=show_plot
+    )
+    km_summary_df = pd.DataFrame([km_stat_yn, km_stat_likert, km_stat_qc])
     
     # 3. Part 3: Competing Risks Analysis (Aalen-Johansen CIF with Unadjusted & Adjusted Cause-Specific Cox HR)
     print(f"\n--- Generating Competing Risks Cumulative Incidence Curves (Aalen-Johansen, Cap: {time_horizon_cap}d) ---")
@@ -716,7 +786,11 @@ def run_survival_analysis_suite(input_db_path, output_db_path, plot_dir, time_ho
         df_cr, "emotional_eating_median_split", "Emotional eating score (1-10)",
         plot_dir, time_horizon_cap=time_horizon_cap, plot_dropout=plot_dropout, show_plot=show_plot
     )
-    cif_summary_df = pd.DataFrame([cif_stat_yn, cif_stat_likert])
+    cif_stat_qc = plot_competing_risks_cif(
+        df_cr, "quantity_control_median_split", "Quantity control score (1-10)",
+        plot_dir, time_horizon_cap=time_horizon_cap, plot_dropout=plot_dropout, show_plot=show_plot
+    )
+    cif_summary_df = pd.DataFrame([cif_stat_yn, cif_stat_likert, cif_stat_qc])
     
     prob_comp_df = compute_event_probabilities_table(df_surv, df_cr, time_horizon_cap=time_horizon_cap)
     
@@ -730,17 +804,6 @@ def run_survival_analysis_suite(input_db_path, output_db_path, plot_dir, time_ho
         print(f"\nSaved Excel workbook: {excel_path}")
     except PermissionError:
         print(f"\nWarning: Could not overwrite {excel_path} because it is open in another program. Skipping Excel overwrite.")
-
-    default_excel_path = os.path.join(plot_dir, "revised_survival_analysis_results.xlsx")
-    if excel_path != default_excel_path:
-        try:
-            with pd.ExcelWriter(default_excel_path, engine="openpyxl") as writer:
-                dropout_comp_df.to_excel(writer, sheet_name="Dropout_60d_Comparison", index=False)
-                km_summary_df.to_excel(writer, sheet_name="KM_LogRank_Summary", index=False)
-                cif_summary_df.to_excel(writer, sheet_name="Competing_Risks_Significance", index=False)
-                prob_comp_df.to_excel(writer, sheet_name="KM_vs_CompetingRisks_Probs", index=False)
-        except PermissionError:
-            print(f"Warning: Could not overwrite {default_excel_path} because it is open in another program.")
 
     with sqlite3.connect(output_db_path) as conn_out:
         dropout_comp_df.to_sql("dropouts_60d_comparison", conn_out, if_exists="replace", index=False)
