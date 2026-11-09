@@ -74,31 +74,32 @@ DROPOUT_COMP_VARS = [
     ("delim_demo", "Demographics and baseline anthropometry", "header"),
     ("sex_f", "Sex (% of females)", "categorical"),
     ("age", "Age (years)", "continuous"),
-    ("height_m", "Height (m)", "continuous"),
+    # ("height_m", "Height (m)", "continuous"),
     ("baseline_weight_kg", "Baseline weight (kg)", "continuous"),
     ("baseline_bmi", "Baseline BMI (kg/m²)", "continuous"),
     ("baseline_fat_%", "Baseline fat mass (%)", "continuous"),
-    ("baseline_muscle_%", "Baseline muscle mass (%)", "continuous"),
-    # Engagement & follow-up metrics
-    ("delim_eng", "Treatment engagement and follow-up", "header"),
-    ("total_followup_days", "Total follow-up length (days)", "continuous"),
-    ("dietitian_visits", "Number of dietitian visits", "continuous"),
-    ("nr_total_measurements", "Total number of measurements", "continuous"),
-    ("avg_days_between_measurements", "Average measurement frequency (days)", "continuous"),
+    # ("baseline_muscle_%", "Baseline muscle mass (%)", "continuous"),
     # Eating behaviors
     ("delim_eb", "Self-reported eating behaviors", "header"),
-    ("hunger_yn", "Hunger awareness (yes/no)", "categorical"),
-    ("satiety_yn", "Satiety responsiveness (yes/no)", "categorical"),
+    ("hunger_yn", "Hunger (yes/no)", "categorical"),
+    ("satiety_yn", "Satiety (yes/no)", "categorical"),
     ("emotional_eating_yn", "Emotional eating (yes/no)", "categorical"),
     ("emotional_eating_value_likert", "Emotional eating score (1-10)", "continuous"),
     ("quantity_control_likert", "Quantity control score (1-10)", "continuous"),
     ("impulse_control_likert", "Impulse control score (1-10)", "continuous"),
+    # Engagement & follow-up metrics
+    ("delim_eng", "Treatment engagement and follow-up", "header"),
+    ("total_followup_days", "Total follow-up length (days)", "continuous"),
+    # ("dietitian_visits", "Number of dietitian visits", "continuous"),
+    # ("nr_total_measurements", "Total number of measurements", "continuous"),
+    # ("avg_days_between_measurements", "Average measurement frequency (days)", "continuous"),
     # Treatment outcomes
     ("delim_out", "Clinical weight loss outcomes", "header"),
     ("total_wl_%", "Total weight loss (%)", "continuous"),
-    ("final_bmi", "Final BMI (kg/m²)", "continuous"),
+    # ("final_bmi", "Final BMI (kg/m²)", "continuous"),
     ("bmi_reduction", "BMI reduction (kg/m²)", "continuous"),
     ("10%_wl_achieved", "Achieved 10% weight loss (n)", "categorical"),
+    ("days_to_10%_wl", "Days to 10% weight loss", "continuous"),
 ]
 
 def compare_60d_dropouts_vs_completers(df):
@@ -238,6 +239,57 @@ def prepare_survival_cohort(df, time_horizon_cap=None):
     return df_surv, median_ee
 
 
+def add_clean_colored_at_risk_table(ax, durations_list, colors, xticks):
+    """
+    Renders an elegant, fixed-width Numbers-at-Risk table below the x-axis.
+    Uses colored horizontal line segments matching the strata curves instead of
+    variable-length text strings. This guarantees 100% identical figure proportions
+    across all plots and eliminates 'KM_estimate' artifacts.
+    
+    Args:
+        ax (matplotlib.axes.Axes): Target plot axes.
+        durations_list (list of pd.Series/np.ndarray): Durations for [group_0, group_1].
+        colors (list of str): Plot line colors [color_0, color_1].
+        xticks (list of int): Time points where active counts are evaluated.
+    """
+    y_header = -0.15
+    y_row0 = -0.21
+    y_row1 = -0.27
+    
+    line_x0 = -0.09
+    line_x1 = -0.04
+    
+    # 1. Header 'At risk' aligned above the line indicators
+    ax.text(
+        line_x0, y_header, "At risk", transform=ax.transAxes,
+        ha="left", va="center", fontsize=9.5, fontweight="bold", clip_on=False
+    )
+    
+    # 2. Strata colored line indicators matching curves and legend
+    ax.plot(
+        [line_x0, line_x1], [y_row0, y_row0], transform=ax.transAxes,
+        color=colors[0], linewidth=2.5, clip_on=False
+    )
+    ax.plot(
+        [line_x0, line_x1], [y_row1, y_row1], transform=ax.transAxes,
+        color=colors[1], linewidth=2.5, clip_on=False
+    )
+    
+    # 3. Numeric counts at each tick mark
+    trans_x_data = ax.get_xaxis_transform()
+    for tick in xticks:
+        c0 = (durations_list[0] >= tick).sum()
+        c1 = (durations_list[1] >= tick).sum()
+        ax.text(
+            tick, y_row0, str(int(c0)), transform=trans_x_data,
+            ha="center", va="center", fontsize=9.5, clip_on=False
+        )
+        ax.text(
+            tick, y_row1, str(int(c1)), transform=trans_x_data,
+            ha="center", va="center", fontsize=9.5, clip_on=False
+        )
+
+
 def plot_corrected_kaplan_meier(df_surv, strata_col, strata_label, output_dir, time_horizon_cap=None, show_plot=True):
     """
     Generates and saves a square, publication-grade Kaplan-Meier plot with proper right-censoring,
@@ -332,10 +384,9 @@ def plot_corrected_kaplan_meier(df_surv, strata_col, strata_label, output_dir, t
     ax.set_xticks(xticks)
     ax.set_xlim(0, max_days)
     
-    add_at_risk_counts(kmf_0, kmf_1, ax=ax, fig=fig, rows_to_show=["At risk"], xticks=xticks, at_risk_count_from_start_of_period=True)
-    ax.set_xlim(0, max_days)
+    add_clean_colored_at_risk_table(ax, [g0["duration"], g1["duration"]], [colors[0], colors[1]], xticks)
     
-    fig.tight_layout(pad=1.5)
+    fig.subplots_adjust(left=0.12, right=0.88, top=0.90, bottom=0.20)
     
     os.makedirs(output_dir, exist_ok=True)
     cap_str = f"_{time_horizon_cap}d" if time_horizon_cap is not None else ""
@@ -612,12 +663,10 @@ def plot_competing_risks_cif(df_cr, strata_col, strata_label, output_dir, time_h
     
     # Add Numbers-at-Risk Table: number of active participants remaining at risk
     if not plot_dropout:
-        kmf0_risk = KaplanMeierFitter().fit(g0["cr_duration"], [1] * len(g0), label=label_0)
-        kmf1_risk = KaplanMeierFitter().fit(g1["cr_duration"], [1] * len(g1), label=label_1)
-        add_at_risk_counts(kmf0_risk, kmf1_risk, ax=ax, fig=fig, rows_to_show=["At risk"], xticks=xticks, at_risk_count_from_start_of_period=True)
-        ax.set_xlim(0, max_days)
-        
-    fig.tight_layout(pad=1.5)
+        add_clean_colored_at_risk_table(ax, [g0["cr_duration"], g1["cr_duration"]], [colors[0], colors[1]], xticks)
+        fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.20)
+    else:
+        fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
     
     os.makedirs(output_dir, exist_ok=True)
     cap_str = f"_{time_horizon_cap}d" if time_horizon_cap is not None else ""
