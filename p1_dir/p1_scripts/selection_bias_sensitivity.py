@@ -2,7 +2,7 @@
 Selection Bias Sensitivity Analysis Module (Paper 1 Revision)
 
 Scientific Purpose:
-Addresses Reviewer Comment 1 regarding analytical cohort selection bias and missingness:
+Addresses Reviewer Comment regarding analytical cohort selection bias and missingness:
 1. Quantifies clinical and timeline predictors of Eating Behavior (EB) questionnaire availability.
 2. Quantifies clinical, timeline, and behavioral predictors of Weight Gain Cause (WGC) narrative disclosure.
 3. Evaluates effect modification / interaction between emotional eating and narrative disclosure status
